@@ -1,0 +1,11 @@
+	{
+  "voices": [
+    {
+      "id": "daw_aye_thant",
+      "label": "ဒေါ်အေးသန့်",
+      "engine": "colab",
+      "reference_id": "ref_clean",
+      "disabled": false
+    }
+  ]
+}
