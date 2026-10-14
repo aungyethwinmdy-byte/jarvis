@@ -4,6 +4,8 @@ config/jarvis_bridge_token
 config/certs/
 config/whatsapp_web/
 **/token*.json
+*token*.json
+config/google_token.json
 **/client_secret*.json
 *credentials*.json
 .env

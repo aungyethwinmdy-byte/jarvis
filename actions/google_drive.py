@@ -35,12 +35,13 @@ def _list_files(service, query: str = "", max_results: int = 10) -> str:
         q_filter += f" and name contains '{clean_q}'"
 
     try:
-        res = service.files().list(
-            q=q_filter,
-            pageSize=max_results,
-            fields="files(id, name, mimeType, modifiedTime, size, webViewLink)",
-            orderBy="modifiedTime desc",
-        ).execute()
+        kwargs = {
+            "pageSize": max_results,
+            "fields": "files(id, name, mimeType, webViewLink)",
+        }
+        if q_filter:
+            kwargs["q"] = q_filter
+        res = service.files().list(**kwargs).execute()
     except Exception as e:
         return f"⚠️ Google Drive ဖိုင်များ ရှာဖွေရာတွင် အမှားဖြစ်ပေါ်ခဲ့သည်: {e}"
 
