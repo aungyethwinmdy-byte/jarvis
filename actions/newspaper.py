@@ -363,6 +363,40 @@ def _parse_day(raw: str) -> date:
 
 
 
+def _do_download(day: date, wanted: str, player=None) -> str:
+    """Download one day's newspaper PDF(s) from mdn.gov.mm.
+
+    Defined 2026-10-13: `newspaper_action` called this on every download request
+    but it never existed — `NameError`, caught by the broad except as a generic
+    failure. A named paper downloads that edition; with no paper named, all
+    editions for the day are downloaded.
+    """
+    editions = _editions(day)
+    if wanted and wanted.strip():
+        edition = _pick(editions, wanted)
+        if edition is None:
+            names = "၊ ".join(e["name"] for e in editions)
+            raise _NewspaperError(
+                f"'{wanted.strip()}' ဆိုတဲ့ သတင်းစာ ဒီနေ့စာရင်းမှာ မရှိပါ — "
+                f"ရှိတာက {names} ပါ။")
+        targets = [edition]
+    else:
+        targets = editions
+
+    done = []
+    for e in targets:
+        dest = _OUT_DIR / f"{day.isoformat()}_{e['slug']}.pdf"
+        _log(f"⬇️ downloading {e['name']} ({day.isoformat()}) …", player)
+        _download_pdf(e["url"], dest)
+        size_mb = round(dest.stat().st_size / 1048576, 1)
+        done.append(f"{e['name']} ({to_burmese_digits(size_mb)} MB)")
+
+    label = burmese_date(datetime(day.year, day.month, day.day, tzinfo=MMT))
+    return (f"✅ {label} သတင်းစာ {to_burmese_digits(len(done))} စောင် "
+            f"ဒေါင်းလုပ် ရရှိပါပြီ — {', '.join(done)}။\n"
+            f"📁 သိမ်းဆည်းထားတဲ့ နေရာ: downloads/newspapers/")
+
+
 def newspaper_action(parameters: dict, player=None, session_memory=None) -> str:
     """One entry point for both jobs, because the loader takes one TOOL per file.
 

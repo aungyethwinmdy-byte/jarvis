@@ -1,4 +1,4 @@
-﻿"""Do the agent-layer fixes actually behave? — the checks that prove them.
+"""Do the agent-layer fixes actually behave? — the checks that prove them.
 
     py check_agent.py
 
@@ -75,8 +75,8 @@ def main() -> int:
                                 "ရန်ကုန်မှာ မိုးရွာမယ်လို့ သတင်းရှိပါတယ်"), True)
 
     _head("F3 — the news route, in code")
-    check("'ဒီနေ့ဘာထူးလဲ' -> daily_briefing",
-          M._news_route("ဒီနေ့ဘာထူးလဲ"), "daily_briefing")
+    check("'ဒီနေ့ဘာထူးလဲ' -> today_briefing",
+          M._news_route("ဒီနေ့ဘာထူးလဲ"), "today_briefing")
     check("'သဘာဝဘေးသတင်းတွေ တက်လား' -> newsroom_search",
           M._news_route("သဘာဝဘေးသတင်းတွေ တက်လား"), "newsroom_search")
     check("'ဒီအကြောင်းအရာ သတင်းရှိလား' -> newsroom_search",
@@ -102,8 +102,8 @@ def main() -> int:
           "reporter_news")
     check("a bare office question with no paper named -> reporter_news",
           M._news_route("ဒီနေ့ သတင်းစာထဲ ဒုတိယသမ္မတ ပါလား"), "reporter_news")
-    check("'ဒီနေ့ သတင်း ဘာတွေလဲ' is still the brief",
-          M._news_route("ဒီနေ့ သတင်း ဘာတွေလဲ"), "daily_briefing")
+    check("'ဒီနေ့ သတင်း ဘာတွေလဲ' is still the brief -> today_briefing",
+          M._news_route("ဒီနေ့ သတင်း ဘာတွေလဲ"), "today_briefing")
 
     _head("F5 — the ladder records which rung answered")
     check("answered_by() is empty before a call", gemini.answered_by(), "")
@@ -1013,11 +1013,13 @@ def main() -> int:
     for q in ("BBC မှာ ပညာရေး သတင်း ရှိလား", "Irrawaddy မှာ ဘာသတင်းလဲ"):
         check(f"a named independent outlet routes to the newsroom: {q[:22]}",
               M._news_route(q), "newsroom_search")
-    for q in ("ဆီဈေး ဘယ်လောက်လဲ", "ရွှေဈေး ဘယ်လောက်လဲ", "ဒေါ်လာဈေး ဘယ်လောက်လဲ"):
+    for q in ("ရွှေဈေး ဘယ်လောက်လဲ", "ဒေါ်လာဈေး ဘယ်လောက်လဲ"):
         check(f"a price question routes to gold_currency: {q[:22]}",
               M._news_route(q), "gold_currency")
-    check("today's news still routes to daily_briefing",
-          M._news_route("ဒီနေ့ သတင်းဘာထူးလဲ"), "daily_briefing")
+    check("fuel price question routes to fuel_prices: ဆီဈေး ဘယ်လောက်လဲ",
+          M._news_route("ဆီဈေး ဘယ်လောက်လဲ"), "fuel_prices")
+    check("today's news routes to today_briefing",
+          M._news_route("ဒီနေ့ သတင်းဘာထူးလဲ"), "today_briefing")
     # The guard that was already there must survive the new rules.
     check("world news is still left to web_search",
           M._news_route("ကမ္ဘာ့သတင်း ပြောပါ"), "")

@@ -445,6 +445,11 @@ def _news_route(query: str) -> str:
     if any(w in q for w in _STATE_PAPERS):
         return "reporter_news"
     if any(w in q for w in _FIGURE_WORDS) and any(w in q for w in ("ဈေး", "နှုန်း", "price")):
+        # Fuel prices have their own tool now (2026-10-13) — gold_currency is
+        # for gold + FX only. "ဆီ" here means fuel, not cooking oil, because
+        # this branch already requires a price word.
+        if any(w in q for w in ("ဆီ", "လောင်စာ", "fuel", "ဓာတ်ဆီ", "ဒီဇယ်", "diesel", "octane")):
+            return "fuel_prices"
         return "gold_currency"
     if any(w in q for w in _NOT_NEWS) and not any(w in q for w in _CONTENT_WORDS):
         return ""
@@ -481,7 +486,7 @@ def _news_route(query: str) -> str:
     if not any(m in q for m in _QUESTION_MARKS):
         return ""
     if any(m in q for m in _TODAY_MARKERS):
-        return "daily_briefing"
+        return "today_briefing"
     # Neither paper named and no price asked. The question could belong to
     # either database — "ပညာရေးအကြောင်း သတင်းရှိလား" is answerable from both.
     # The newsroom keeps it, because it is the one the assistant has answered
@@ -2081,7 +2086,10 @@ class JarvisLive:
         # the headlines out a few seconds later. The user asked for the news to
         # wait until it is asked for — every launch was becoming a broadcast,
         # whether or not anything was wanted — so it now lives in the
-        # daily_briefing tool, which is reached by asking "ဒီနေ့ဘာထူးလဲ".
+        # daily_briefing tool, which is reached by asking "နောက်ဆုံးရသတင်း".
+        # "ဒီနေ့ဘာထူးလဲ" goes to today_briefing (2026-10-13) — today's MMT
+        # calendar day only, moi.gov.mm sections in priority order, then
+        # BBC/Irrawaddy.
         #
         # The greeting itself is unchanged: mingalaba, the date, the time and
         # the weather, spoken as soon as JARVIS connects.

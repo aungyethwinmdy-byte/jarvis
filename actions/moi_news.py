@@ -16,6 +16,15 @@ So the split is now:
     `news_section` /           the database copies, for the topics the site has
     `reporter_news`            no section for, and for "search the database"
 
+**Search goes index first, live as fallback (2026-10-13):** a keyword `search`
+reads the local crawl index (`core/moi_index.py`) first — same site, crawled,
+1–2 s, carries `published_date` (so `date`/`days` filters actually work; the
+site's own search returns no dates and the old code silently emptied the list
+when a date filter was applied, measured 2026-10-03), and covers the whole
+archive. The live site search + section walk is the fallback when the index has
+nothing. Section *listing* ("what is in the president section today") stays
+live — that is the one question a cache can answer wrongly.
+
 **`jarvis_news` and `core/jarvis_client.py` were REMOVED on 2026-10-01** — the
 owner's instruction, *"jarvis news ကိုဖျက်လိုက်"*. It held a migrated copy of the
 state papers, and the one thing it carried that the site does not — ပညာရေး ·
@@ -139,6 +148,28 @@ def _card(c: dict, body: str = "") -> str:
     if text and text != head:
         out.append(f"**အနှစ်ချုပ်**: {text[:600]}{'…' if len(text) > 600 else ''}")
     out.append(f"**လင့်**: {mc.BASE}{c.get('url')}")
+    return "\n".join(out)
+
+
+def _index_card(r: dict) -> str:
+    """One article from the local crawl index, in the same shape as `_card`.
+
+    The index row carries `published_date` (YYYY-MM-DD), so unlike the site's
+    own search results the date line is always printed — a date filter that
+    silently emptied the live list (measured 2026-10-03) cannot do that here.
+    """
+    url = str(r.get("url") or "")
+    link = url if url.startswith("http") else (f"{mc.BASE}{url}" if url else mc.BASE)
+    head = str(r.get("title") or "").strip()
+    where = r.get("section_label") or r.get("section") or "moi.gov.mm"
+    stamp = str(r.get("published_date") or "").strip()
+    out = [f"**ရင်းမြစ်**: moi.gov.mm (index) — {where}"
+           + (f" (ရက်စွဲ: {_date(stamp)})" if stamp else ""),
+           f"**ခေါင်းစဉ်**: {head}"]
+    text = str(r.get("summary") or "").strip()
+    if text and text != head:
+        out.append(f"**အနှစ်ချုပ်**: {text[:600]}{'…' if len(text) > 600 else ''}")
+    out.append(f"**လင့်**: {link}")
     return "\n".join(out)
 
 
@@ -364,6 +395,49 @@ def moi_news(parameters: dict = None, player=None, session_memory=None, **_) -> 
     # ── A term across the sections ──────────────────────────────────────────
     if action in ("search", "find") and term:
         slug = mc.resolve_section(asked) if asked != term else ""
+        # ── The local index FIRST — same site, crawled, 1–2 s, dated, whole
+        # archive. The live site search + section walk below is the fallback.
+        # The index carries `published_date`, so `date`/`days` filters work
+        # here — the site's own search returns no dates, and the old code
+        # applied the filter to that dateless list and silently emptied every
+        # result (measured 2026-10-03).
+        idx_hits: list[dict] = []
+        idx_note = ""
+        try:
+            rep = ix.search(term, section=slug, date=date, days=days,
+                            limit=_DISPLAY_MAX)
+            idx_hits = rep.get("hits") or []
+        except Exception:                                   # noqa: BLE001
+            idx_hits = []
+        if not idx_hits and (date or days):
+            # The filter may be why the index found nothing — retry once
+            # without it and say so, rather than falling through to a dateless
+            # live list. (Same honesty rule as moi_research.)
+            try:
+                rep = ix.search(term, section=slug, limit=_DISPLAY_MAX)
+                if rep.get("hits"):
+                    idx_hits = rep.get("hits") or []
+                    idx_note = ("ℹ️ ရက်နဲ့ စစ်လို့ မတွေ့လို့ ရက်မပါ ရှာထားပါတယ် — "
+                                "အောက်က ရက်စွဲတွေကို ကြည့်ပြီး ရွေးပါ။")
+            except Exception:                               # noqa: BLE001
+                pass
+        if idx_hits:
+            try:
+                idx_when = ix.last_run() or ""
+            except Exception:                               # noqa: BLE001
+                idx_when = ""
+            out = [f"'{term}' နဲ့ ကိုက်တဲ့ သတင်း "
+                   f"{to_burmese_digits(len(idx_hits))} ခု (moi.gov.mm — index):", ""]
+            for r in idx_hits[:limit]:
+                out += [_index_card(r), ""]
+            if idx_note:
+                out.append(idx_note)
+            out.append(f"ℹ️ MOI index ထဲက ရှာထားတာပါ"
+                       + (f" (crawl: {idx_when[:16]})" if idx_when else "")
+                       + " — ဒီစာရင်းမှာ ရက်စွဲ ပါပါတယ်။ "
+                         "ဒီနေ့အသစ်ဆုံး သတင်း လိုချင်ရင် live မှာ ထပ်စစ်ခိုင်းပါ။")
+            return "\n".join(out).rstrip()
+        # ── The index had nothing: live site search + section walk (below). ──
         # **The site's own search first.** One request per page, relevance-ranked,
         # and it reaches the whole archive. Measured 2026-10-03: the page-walk was
         # bounded at 4 pages per section, so the president's trip to India
@@ -582,7 +656,12 @@ TOOL = {
         "'list' (default) — a section's articles, newest first. "
         "'search' — a **term** across the sections, e.g. a country, a place or a "
         "person's name; use it for 'X အကြောင်း သတင်းရှိလား'. "
-        "**The result list carries only a one-line snippet and no date** — so for "
+        "**`search` reads the local MOI index first** (the same site, crawled — "
+        "1–2 s, dated, whole archive) and falls back to the live site search + "
+        "section walk only when the index has nothing. The answer always says "
+        "which source it used. "
+        "**The result list carries only a one-line snippet** (index results also "
+        "carry the date; live site-search results do not) — so for "
         "a question that asks for a summary ('အကျဉ်းချုပ် တင်ပြပါ', 'အသေးစိတ် ပြောပါ'), "
         "follow it with `action='story'` on the most relevant link and summarise "
         "from the article's own text. Measured 2026-10-03: a summary was spoken "
