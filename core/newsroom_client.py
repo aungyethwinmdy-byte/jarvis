@@ -356,6 +356,41 @@ def _safe_query(q: str) -> str:
     return _ILIKE_SPECIAL.sub(lambda m: "\\" + m.group(), q)
 
 
+# A query the user typed may be several words ("လေးမျက်နှာ ရေဘေး"). Burmese
+# writes most words joined, so whitespace marks phrase-sized units — the keyword
+# the user means is normally the whole unit, not the letters inside it.
+_TERM_SPLIT = re.compile(r"[\s\u200b]+")
+_MAX_SEARCH_TERMS = 5
+
+
+def _terms(query: str) -> list[str]:
+    """The whitespace-separated search terms, in the order the user wrote them."""
+    return [t for t in _TERM_SPLIT.split(str(query or "").strip())
+            if len(t) >= 2][:_MAX_SEARCH_TERMS]
+
+
+def _like_any(terms: list[str], columns: tuple[str, ...]) -> str:
+    """A PostgREST filter that matches EVERY term in ANY of `columns`.
+
+    A multi-word query used to be matched as one literal substring that included
+    the space, so `%လေးမျက်နှာ ရေဘေး%` found nothing unless an article happened to
+    write the two words adjacently. Measured on the live database 2026-10-17:
+    that query returned 0 hits while `လေးမျက်နှာ` alone returned 4 and `ရေဘေး`
+    alone returned 8 — and the story the user was asking about carried both.
+    Terms are OR-ed within a column pair and AND-ed across terms, so the words
+    may sit anywhere on the page, which is what "search for this topic" means.
+    A one-word query produces exactly the filter this function replaced.
+    """
+    if len(terms) == 1:
+        pattern = f"%{_safe_query(terms[0])}%"
+        return ",".join(f"{c}.ilike.{pattern}" for c in columns)
+    groups = []
+    for term in terms:
+        pattern = f"%{_safe_query(term)}%"
+        groups.append("or(" + ",".join(f"{c}.ilike.{pattern}" for c in columns) + ")")
+    return "and(" + ",".join(groups) + ")"
+
+
 def clean_for_speech(text: Any) -> str:
     """Telegram-HTML report -> plain Burmese that is safe to read aloud.
 
@@ -540,20 +575,21 @@ def search_articles(query: str, days: int = 120, limit: int = 8) -> list[dict]:
     q = str(query or "").strip()
     if len(q) < 2:
         return []
-    q_safe = _safe_query(q)
+    terms = _terms(q)
+    if not terms:
+        return []
 
     def produce() -> list[dict]:
         sb = _get_client()
         if sb is None:
             return []
         since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-        # ilike on both title and content; PostgREST OR syntax is one string.
-        pattern = f"%{q_safe}%"
+        # Every term, against title or content — see _like_any().
         res = _run(
             lambda: sb.table("news_articles")
             .select("id,source_id,source_name,source_type,title,url,published_at,status")
             .gte("published_at", since)
-            .or_(f"title.ilike.{pattern},content.ilike.{pattern}")
+            .or_(_like_any(terms, ("title", "content")))
             .order("published_at", desc=True)
             .limit(limit)
             .execute(),
@@ -641,24 +677,28 @@ def search_reports(query: str, days: int = 30, limit: int = 8) -> list[dict]:
     q = str(query or "").strip()
     if len(q) < 2:
         return []
-    q_safe = _safe_query(q)
+    terms = _terms(q)
+    if not terms:
+        return []
 
     def produce() -> list[dict]:
         sb = _get_client()
         if sb is None:
             return []
         since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-        res = _run(
-            lambda: sb.table("news_reports")
-            .select("article_id,created_at")
-            .eq("report_type", "single_editorial")
-            .gte("created_at", since)
-            .ilike("full_report", f"%{q_safe}%")
-            .order("created_at", desc=True)
-            .limit(limit)
-            .execute(),
-            "search_reports",
-        )
+
+        def query_reports():
+            # One ilike per term; chained ilikes AND themselves, so a
+            # multi-word query matches the report that carries every word.
+            qy = (sb.table("news_reports")
+                  .select("article_id,created_at")
+                  .eq("report_type", "single_editorial")
+                  .gte("created_at", since))
+            for term in terms:
+                qy = qy.ilike("full_report", f"%{_safe_query(term)}%")
+            return qy.order("created_at", desc=True).limit(limit).execute()
+
+        res = _run(query_reports, "search_reports")
         ids = [r.get("article_id") for r in (res.data or [])]
         return _articles_by_ids(sb, ids)
 
