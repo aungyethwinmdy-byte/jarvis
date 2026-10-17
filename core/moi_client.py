@@ -296,10 +296,24 @@ def _cached(key, produce, default):
 
 
 def available() -> tuple[bool, str]:
-    """(reachable, why not). Probes once and remembers the route."""
+    """(reachable, why not). Probes a few sections and remembers the route."""
     def produce():
-        doc = _fetch("/president-news", tries=2)
-        return bool(doc and "/news/" in doc)
+        # More than one section is asked; the first that answers wins. Measured
+        # 2026-10-17: /president-news answered 503 while /news, /other-news and
+        # the hluttaw sections served 20 cards each. This probe's answer decides
+        # whether MOI is offered at all, so one flaky section read as "the whole
+        # site is down" and every MOI section was skipped from the briefing.
+        # tries=1 keeps the fallback cheap — a 503 still costs about a second,
+        # not the 25s read timeout. Returning (not raising) also lets the
+        # negative be cached, so an outage is paid once per TTL, not per call.
+        for probe in ("/news", "/other-news", "/president-news"):
+            try:
+                doc = _fetch(probe, tries=1)
+            except Exception:
+                continue
+            if doc and "/news/" in doc:
+                return True
+        return False
     ok = _cached("probe", produce, False)
     if ok:
         return True, ""

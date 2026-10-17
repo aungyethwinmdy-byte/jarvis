@@ -1585,7 +1585,17 @@ class JarvisLive:
         if not self.ui.muted:
             self.ui.set_state("LISTENING")
 
-        print(f"[JARVIS] 📤 {name} → {str(result)[:80]}")
+        # The results shown here are what the model is answering FROM, so a
+        # window that stops at 80 characters reads as "the tool returned only
+        # this much". A today_briefing of ten items across three outlets looked
+        # like a single BBC section, and a correct briefing was reported as a
+        # broken one. Print a generous window and, when it is cut, say so and
+        # by how much — a truncated log must never look like a short answer.
+        _r = str(result)
+        _cap = 1000
+        _shown = _r if len(_r) <= _cap else (
+            _r[:_cap] + f"\n   … [log truncated: {len(_r) - _cap} of {len(_r)} chars not shown]")
+        print(f"[JARVIS] 📤 {name} → {_shown}")
 
         _sched = (self._action_registry.scheduling(name) or self._plugin_registry.scheduling(name))
         _extra = {"scheduling": _sched} if _sched else {}
