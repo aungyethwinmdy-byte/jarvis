@@ -1,8 +1,9 @@
 """Did other outlets carry that story — and how does their version differ?
 
 THE SCOPE, STATED PLAINLY
-    The newsroom collects three outlets: PPIB, BBC Burmese and The Irrawaddy. So
-    "other outlets" means the other two, and that is what this searches —
+    The newsroom collects four outlets: PPIB, BBC Burmese, The Irrawaddy and DVB
+    Burmese. So "other outlets" means the other three, and that is what this
+    searches —
     `coverage_in_other_outlets()` reads the same database the briefing does.
 
     An earlier version also read four live feeds from outside the newsroom (DVB,
@@ -68,8 +69,9 @@ TOOL = {
         "whether a story is being reported elsewhere: 'ဒီသတင်း တခြားသတင်းဌာနတွေမှာ "
         "ဖော်ပြထားလား', 'တခြားဌာနတွေက ဘယ်လိုဖော်ပြလဲ', 'နှိုင်းယှဉ်ပြပါ', 'is this "
         "being reported elsewhere', 'how are other outlets covering this', "
-        "'compare the coverage'. The newsroom monitors exactly three outlets — "
-        "PPIB, BBC Burmese and The Irrawaddy — so the search covers the other two, "
+        "'compare the coverage'. The newsroom monitors exactly four outlets — "
+        "PPIB, BBC Burmese, The Irrawaddy and DVB Burmese — so the search covers "
+        "the other three, "
         "and the answer names them. If none of them carried it, this says so "
         "plainly; report that faithfully and do not soften it into 'it might be "
         "elsewhere'. Pass the story's headline EXACTLY as it was read out in "

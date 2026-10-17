@@ -46,6 +46,7 @@ _PRIORITY_SECTIONS = (
 _INDEPENDENT = (
     ("bbcburmese", "BBC မြန်မာ"),
     ("irrawaddy", "ဧရာဝတီ"),
+    ("dvb", "ဒီဗွီဘီ"),
 )
 _MAX_PER_SECTION = 4
 
@@ -157,7 +158,8 @@ TOOL = {
         "36-hour window. Priority order, exactly as the owner asked: "
         "moi.gov.mm sections first (နိုင်ငံတော်သမ္မတ → ဒုတိယသမ္မတ → လွှတ်တော်သတင်း "
         "→ ပြည်ထောင်စုလွှတ်တော် → ပြည်သူ့လွှတ်တော် → အမျိုးသားလွှတ်တော် → "
-        "တပ်မတော်ကာကွယ်ရေးဦးစီးချုပ်), then BBC Burmese and The Irrawaddy from "
+        "တပ်မတော်ကာကွယ်ရေးဦးစီးချုပ်), then BBC Burmese, The Irrawaddy and "
+        "DVB Burmese from "
         "the newsroom DB. Sections with no news today are skipped. "
         "**Use this — not `daily_briefing`, not `web_search` — whenever the "
         "user asks what is new today.** `daily_briefing` (last 36h) is for "

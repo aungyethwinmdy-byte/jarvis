@@ -117,6 +117,34 @@ def _resolve_location_alias(loc: Optional[str]) -> str:
     return cleaned
 
 
+# Ways a user says "where I am right now" without naming a place. Kept explicit
+# rather than a bare "ဒီ" because that syllable occurs inside ordinary names.
+_HERE_HINTS = (
+    "ဒီနေရာ", "ဒီကနေ", "ဒီက", "လက်ရှိနေရာ", "လက်ရှိတည်နေရာ",
+    "ငါ့နေရာ", "ဆရာ့နေရာ", "ငါရောက်နေတဲ့", "ရောက်နေတဲ့နေရာ",
+    "here", "my location", "current location", "current position",
+)
+
+
+def _resolve_origin_for_directions(origin: Optional[str]) -> str:
+    """The starting point for a directions request.
+
+    When the user means 'from here' — an omitted origin, or one that only names
+    their own position — this must be the LIVE device location, not the saved
+    home. That is the whole point of the question: the distance from where they
+    are right now, which changes each time they move. The saved location is used
+    only when the device cannot supply coordinates.
+    """
+    t = (origin or "").strip()
+    low = t.lower()
+    if (not t) or any(h in t or h in low for h in _HERE_HINTS):
+        coords = _get_device_coordinates()
+        if coords:
+            return f"{coords[0]},{coords[1]}"
+        return _get_user_home_location()
+    return _resolve_location_alias(t)
+
+
 def _format_duration_burmese(seconds: float) -> str:
     """Formats duration in seconds into natural Burmese time text."""
     total_mins = max(1, int(round(seconds / 60.0)))
@@ -202,6 +230,88 @@ def _geocode_nominatim(query: str) -> Optional[Tuple[float, float, str]]:
             break
 
     return None
+
+
+def _geocode_any(query: str) -> Optional[Tuple[float, float, str]]:
+    """Resolve a place string to (lat, lon, display) by any means available.
+
+    Nominatim first — it is free and reads Burmese addresses — then Google
+    Places Text Search, which is what resolves the nicknames the user actually
+    types: 'Mara Vihara Buddha Park' is the real 'Maravijaya Buddha Statue', and
+    Nominatim and the Routes geocoder refuse it while a Maps text search finds
+    it. Without this a correctly-routed directions call still answered
+    "ရှာမတွေ့ပါ".
+    """
+    q_norm = (query or "").strip().lower()
+    if not q_norm:
+        return None
+    if q_norm in _GEO_CACHE:
+        return _GEO_CACHE[q_norm]
+
+    geo = _geocode_nominatim(query)
+    if geo:
+        return geo
+
+    key = _get_api_key()
+    if key:
+        # Bias the text search to the user's own area. Without it a search for a
+        # local nickname can match the same-named place on the other side of
+        # Asia — "Mara Vihara Buddha Park" matched a vihara in Kuala Lumpur and
+        # the route came back 2400 km long.
+        loc_bias = _get_user_home_location() or "Myanmar"
+        places = _places_google(query, loc_bias, key)
+        if places:
+            p = places[0]
+            lat, lng = p.get("lat"), p.get("lng")
+            if lat is not None and lng is not None:
+                res = (float(lat), float(lng), p.get("address") or query)
+                _GEO_CACHE[q_norm] = res
+                return res
+    return None
+
+
+def _parse_coords(text: str) -> Optional[Tuple[float, float]]:
+    """Parse 'lat,lng'.
+
+    Directions endpoints arrive this way when the user means 'from here': the
+    dispatcher resolves their live position to coordinates before calling in.
+    """
+    m = re.fullmatch(r"\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*", text or "")
+    if not m:
+        return None
+    return (float(m.group(1)), float(m.group(2)))
+
+
+def _coords_or_geocode(text: str) -> Optional[Tuple[float, float, str]]:
+    """(lat, lon, display) for an endpoint, accepting bare coordinates.
+
+    For that same 'from here' case: the value is already resolved, so geocoding
+    it must be skipped — Nominatim cannot find its own output, and the answer
+    would be 'သွားရောက်မည့်နေရာ ရှာမတွေ့ပါ' for the user's own position.
+    """
+    c = _parse_coords(text)
+    if c:
+        return (c[0], c[1], text)
+    return _geocode_any(text)
+
+
+def _point_label(text: str) -> str:
+    """Readable label for one end of a route.
+
+    A 'from here' origin arrives as bare coordinates, which must not be read out
+    as "19.749 (96.069)" — that is not an answer to "where am I". Reverse-geocode
+    to the street address instead, and fall back to plain wording if that fails.
+    Named places are passed through untouched.
+    """
+    c = _parse_coords(text)
+    if not c:
+        return text
+    data = _reverse_geocode_nominatim(c[0], c[1])
+    if data:
+        addr = _format_address_from_data(data)
+        if addr:
+            return addr
+    return "လက်ရှိတည်နေရာ"
 
 
 def _osrm_route(lat1: float, lon1: float, lat2: float, lon2: float, mode: str) -> Optional[Dict[str, Any]]:
@@ -308,6 +418,19 @@ def _places_nominatim(query: str, location: Optional[str] = None) -> List[Dict[s
 
 # ── Google Maps API Implementation ────────────────────────────────────────────
 
+def _routes_waypoint(text: str) -> Dict[str, Any]:
+    """A Routes API waypoint: bare coordinates become latLng, anything else an address.
+
+    The API will not geocode a "19.749,96.069" string as an address, so the
+    'from here' origin has to be sent as a location or every directions request
+    starting at the user's live position fails over to OSRM.
+    """
+    c = _parse_coords(text)
+    if c:
+        return {"location": {"latLng": {"latitude": c[0], "longitude": c[1]}}}
+    return {"address": (text or "").strip()}
+
+
 def _directions_google(origin: str, destination: str, mode: str, api_key: str) -> Optional[Dict[str, Any]]:
     """Query official Google Routes API (computeRoutes)."""
     # Routes API travel modes: DRIVE, WALK, BICYCLE, TRANSIT, TWO_WHEELER
@@ -318,8 +441,8 @@ def _directions_google(origin: str, destination: str, mode: str, api_key: str) -
         g_mode = "TRANSIT"
 
     body = json.dumps({
-        "origin": {"address": origin.strip()},
-        "destination": {"address": destination.strip()},
+        "origin": _routes_waypoint(origin),
+        "destination": _routes_waypoint(destination),
         "travelMode": g_mode,
         "languageCode": "my",
         "units": "METRIC",
@@ -387,7 +510,7 @@ def _places_google(query: str, location: Optional[str], api_key: str) -> Optiona
         headers={
             "Content-Type": "application/json",
             "X-Goog-Api-Key": api_key,
-            "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.rating,places.userRatingCount,places.currentOpeningHours,places.nationalPhoneNumber,places.websiteUri",
+            "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.rating,places.userRatingCount,places.currentOpeningHours,places.nationalPhoneNumber,places.websiteUri,places.location",
         },
         method="POST",
     )
@@ -410,6 +533,7 @@ def _places_google(query: str, location: Optional[str], api_key: str) -> Optiona
                     hours = item.get("currentOpeningHours")
                     if isinstance(hours, dict):
                         open_now = hours.get("openNow")
+                    loc = item.get("location") or {}
 
                     places.append({
                         "name": name,
@@ -419,6 +543,8 @@ def _places_google(query: str, location: Optional[str], api_key: str) -> Optiona
                         "phone": phone,
                         "website": web,
                         "open_now": open_now,
+                        "lat": loc.get("latitude"),
+                        "lng": loc.get("longitude"),
                     })
                 return places
             err = data.get("error", {})
@@ -431,6 +557,27 @@ def _places_google(query: str, location: Optional[str], api_key: str) -> Optiona
 
 
 # ── Core Features ─────────────────────────────────────────────────────────────
+
+def _maps_url_point(text: str) -> str:
+    """One endpoint of a Google Maps directions link, as Google wants it.
+
+    Google Maps' own geocoder resolves `lat,lng` reliably and Burmese addresses
+    poorly: handing it the Burmese-format address that get_current_location()
+    prints made the browser answer "Google Maps can't find 5 လမ်း၊ ..." even
+    though the route itself had been computed. So resolve the text to
+    coordinates first (cached, so the OSRM fallback below pays nothing extra)
+    and fall back to the raw text only when geocoding fails.
+    """
+    t = (text or "").strip()
+    if not t:
+        return ""
+    if re.fullmatch(r"-?\d+(?:\.\d+)?\s*,\s*-?\d+(?:\.\d+)?", t):
+        return t
+    geo = _geocode_any(t)
+    if geo:
+        return f"{geo[0]},{geo[1]}"
+    return t
+
 
 def get_directions(origin: str, destination: str, mode: str = "driving", open_map: bool = False) -> str:
     """Calculates travel distance (km), estimated duration, and route summary.
@@ -457,7 +604,12 @@ def get_directions(origin: str, destination: str, mode: str = "driving", open_ma
         norm_mode = "driving"
 
     mode_label = _MODE_NAMES_MM.get(norm_mode, "မော်တော်ကားဖြင့်")
-    map_url = f"https://www.google.com/maps/dir/?api=1&origin={urllib.parse.quote(orig_clean)}&destination={urllib.parse.quote(dest_clean)}&travelmode={norm_mode}"
+    # Coordinates where possible, so the browser link actually resolves — see
+    # _maps_url_point above for why a Burmese address must not go in raw.
+    map_url = (f"https://www.google.com/maps/dir/?api=1"
+               f"&origin={urllib.parse.quote(_maps_url_point(orig_clean))}"
+               f"&destination={urllib.parse.quote(_maps_url_point(dest_clean))}"
+               f"&travelmode={norm_mode}")
     opened_msg = ""
     if open_map:
         try:
@@ -478,7 +630,7 @@ def get_directions(origin: str, destination: str, mode: str = "driving", open_ma
             dur_mm = _format_duration_burmese(dur_sec)
 
             return (
-                f"📍 {orig_clean} မှ {dest_clean} သို့ လမ်းကြောင်း အချက်အလက်:\n"
+                f"📍 {_point_label(orig_clean)} မှ {_point_label(dest_clean)} သို့ လမ်းကြောင်း အချက်အလက်:\n"
                 f"• ခရီးအကွာအဝေး: {dist_mm} ကီလိုမီတာ\n"
                 f"• ခန့်မှန်းကြာချိန်: {mode_label} {dur_mm}\n"
                 f"• အဓိကလမ်းကြောင်း: {summary} မှတစ်ဆင့် သွားရောက်နိုင်ပါသည်။\n"
@@ -488,11 +640,11 @@ def get_directions(origin: str, destination: str, mode: str = "driving", open_ma
             return f"'{orig_clean}' မှ '{dest_clean}' သို့ သွားရောက်နိုင်သည့် လမ်းကြောင်း ရှာမတွေ့ပါခင်ဗျာ။"
 
     # 2. Fallback: OpenStreetMap (Nominatim Geocoding + OSRM Routing)
-    geo_start = _geocode_nominatim(orig_clean)
+    geo_start = _coords_or_geocode(orig_clean)
     if not geo_start:
         return f"စတင်မည့်နေရာ '{orig_clean}' ကို မြေပုံပေါ်တွင် ရှာမတွေ့ပါခင်ဗျာ။ တည်နေရာအမည်ကို စစ်ဆေးပေးပါ။"
 
-    geo_end = _geocode_nominatim(dest_clean)
+    geo_end = _coords_or_geocode(dest_clean)
     if not geo_end:
         return f"သွားရောက်မည့်နေရာ '{dest_clean}' ကို မြေပုံပေါ်တွင် ရှာမတွေ့ပါခင်ဗျာ။ တည်နေရာအမည်ကို စစ်ဆေးပေးပါ။"
 
@@ -510,8 +662,8 @@ def get_directions(origin: str, destination: str, mode: str = "driving", open_ma
     dist_mm = _format_distance_burmese(dist_km)
     dur_mm = _format_duration_burmese(dur_sec)
 
-    orig_short = _clean_place_name(orig_clean)
-    dest_short = _clean_place_name(dest_clean)
+    orig_short = _clean_place_name(_point_label(orig_clean))
+    dest_short = _clean_place_name(_point_label(dest_clean))
 
     action_word = "လမ်းလျှောက်သွားနိုင်ပါသည်" if norm_mode == "walking" else ("စီးနင်းနိုင်ပါသည်" if norm_mode == "transit" else "မောင်းနှင်နိုင်ပါသည်")
 
@@ -524,11 +676,13 @@ def get_directions(origin: str, destination: str, mode: str = "driving", open_ma
     )
 
 
-def find_places(query: str, location: Optional[str] = None) -> str:
+def find_places(query: str, location: Optional[str] = None, open_map: bool = False) -> str:
     """Searches for nearby places, restaurants, hospitals, hotels, or cafes.
 
-    Returns names, addresses, and ratings in clean Burmese format.
-    Uses Google Places API if configured, otherwise falls back to OpenStreetMap Nominatim.
+    Returns names, addresses, and ratings in clean Burmese format, plus a Google
+    Maps link for the search. Uses Google Places API if configured, otherwise
+    falls back to OpenStreetMap Nominatim. When open_map is True the search is
+    also opened in the default browser.
     """
     q_clean = (query or "").strip()
     raw_loc = (location or "").strip() if location else None
@@ -541,6 +695,19 @@ def find_places(query: str, location: Optional[str] = None) -> str:
         return "ရှာဖွေလိုသော နေရာ၊ ဆေးရုံ၊ ဟိုတယ် သို့မဟုတ် ဆိုင်အမျိုးအစားကို ဖော်ပြပေးပါခင်ဗျာ။"
 
     target_desc = f"{loc_clean} ရှိ {q_clean}" if loc_clean else q_clean
+
+    # Built before the search so the "nothing found" reply can still hand the
+    # link over — an empty result list is exactly when seeing the map helps.
+    map_url = ("https://www.google.com/maps/search/?api=1&query="
+               + urllib.parse.quote(f"{q_clean} {loc_clean}".strip()))
+    opened_msg = ""
+    if open_map:
+        try:
+            webbrowser.open(map_url)
+            opened_msg = ("\n🌐 Google Maps မြေပုံပေါ်တွင် ရှာဖွေမှုကို Browser ဖြင့် "
+                          "ဖွင့်ပြပေးလိုက်ပါပြီခင်ဗျာ။")
+        except Exception as e:
+            print(f"[MapsNavigator] Failed to open browser: {e}")
 
     places: List[Dict[str, Any]] = []
 
@@ -556,7 +723,8 @@ def find_places(query: str, location: Optional[str] = None) -> str:
         places = _places_nominatim(q_clean, loc_clean)
 
     if not places:
-        return f"'{target_desc}' အတွက် ရှာဖွေတွေ့ရှိသည့် နေရာမရှိသေးပါခင်ဗျာ။"
+        return (f"'{target_desc}' အတွက် ရှာဖွေတွေ့ရှိသည့် နေရာမရှိသေးပါခင်ဗျာ။\n"
+                f"🌐 Google Maps လင့်ခ်: {map_url}{opened_msg}")
 
     lines: List[str] = [f"📍 '{target_desc}' အတွက် တွေ့ရှိသော နေရာများ:"]
     for i, p in enumerate(places[:4], 1):
@@ -582,7 +750,8 @@ def find_places(query: str, location: Optional[str] = None) -> str:
             line += f"\n   • ဖုန်း: {p['phone']}"
         lines.append(line)
 
-    return "\n".join(lines)
+    lines.append(f"🌐 Google Maps လင့်ခ်: {map_url}")
+    return "\n".join(lines) + opened_msg
 
 
 _CACHED_DEVICE_COORDS: Optional[Tuple[float, float]] = None
@@ -598,36 +767,44 @@ def _get_device_coordinates() -> Optional[Tuple[float, float]]:
 
     if sys.platform != "win32":
         return None
-    try:
-        ps = (
-            "Add-Type -AssemblyName System.Device; "
-            "$w = New-Object System.Device.Location.GeoCoordinateWatcher; "
-            "$w.Start(); "
-            "for ($i=0; $i -lt 15; $i++) { "
-            "  if (-not $w.Position.Location.IsUnknown) { break }; "
-            "  Start-Sleep -Milliseconds 150 "
-            "}; "
-            "$p = $w.Position.Location; "
-            "if (-not $p.IsUnknown) { "
-            "  Write-Output ($p.Latitude.ToString() + ',' + $p.Longitude.ToString()) "
-            "}; "
-            "$w.Stop()"
-        )
-        r = subprocess.run(
-            ["powershell", "-NoProfile", "-Command", ps],
-            capture_output=True,
-            text=True,
-            timeout=8.0,
-        )
-        out = r.stdout.strip()
-        if out and "," in out:
-            parts = out.split(",")
-            coords = (float(parts[0]), float(parts[1]))
-            _CACHED_DEVICE_COORDS = coords
-            _CACHED_DEVICE_TIME = now
-            return coords
-    except Exception as e:
-        print(f"[MapsNavigator] Windows device location error: {e}")
+
+    # The GeoCoordinateWatcher is lazy: a first Start() can report "unknown" for
+    # a second or two before Windows has a fix, which made the first "where am
+    # I" of a session fall back to the stale saved location. Give it a longer
+    # window and, if that still fails, try once more with a fresh watcher.
+    ps = (
+        "Add-Type -AssemblyName System.Device; "
+        "$w = New-Object System.Device.Location.GeoCoordinateWatcher; "
+        "$w.Start(); "
+        "for ($i=0; $i -lt 20; $i++) { "
+        "  if (-not $w.Position.Location.IsUnknown) { break }; "
+        "  Start-Sleep -Milliseconds 200 "
+        "}; "
+        "$p = $w.Position.Location; "
+        "if (-not $p.IsUnknown) { "
+        "  Write-Output ($p.Latitude.ToString() + ',' + $p.Longitude.ToString()) "
+        "}; "
+        "$w.Stop()"
+    )
+    for attempt in range(2):
+        try:
+            r = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", ps],
+                capture_output=True,
+                text=True,
+                timeout=8.0,
+            )
+            out = r.stdout.strip()
+            if out and "," in out:
+                parts = out.split(",")
+                coords = (float(parts[0]), float(parts[1]))
+                _CACHED_DEVICE_COORDS = coords
+                _CACHED_DEVICE_TIME = time.time()
+                return coords
+        except Exception as e:
+            print(f"[MapsNavigator] Windows device location error: {e}")
+        if attempt == 0:
+            time.sleep(0.4)
 
     if _CACHED_DEVICE_COORDS:
         return _CACHED_DEVICE_COORDS
@@ -730,6 +907,17 @@ def get_current_location(open_map: bool = False) -> str:
             f"• အခြေအနေ: စက်ပစ္စည်း၏ Live Location (GPS/Wi-Fi တည်နေရာ) ဖြင့် တိုက်ရိုက်ရယူထားပါသည်ခင်ဗျာ။{opened_msg}"
         )
 
+    if coords:
+        # A fix is a fix: the coordinates already answer "where am I", and
+        # dropping them only because the address lookup failed sent the user
+        # back to a stale saved location instead.
+        return (
+            f"📍 ဆရာ လက်ရှိရောက်ရှိနေသော တည်နေရာ အချက်အလက်:\n"
+            f"• GPS သြဒီနိတ်: {coords_text}\n"
+            f"• Google Maps လင့်ခ်: {map_url}\n"
+            f"• အခြေအနေ: စက်ပစ္စည်း၏ Live Location (GPS/Wi-Fi) ဖြင့် တိုက်ရိုက်ရယူထားပါသည်။ လိပ်စာ အသေးစိတ်ကို ယခုအချိန် ဖော်ပြမနိုင်ပါ။{opened_msg}"
+        )
+
     # Fallback to saved memory
     return (
         f"📍 ဆရာ့ရဲ့ လက်ရှိ သတ်မှတ်ထားသော တည်နေရာ အချက်အလက်:\n"
@@ -781,8 +969,9 @@ def maps_navigator(
         result = get_current_location(open_map=open_map)
     # Route request: if destination is provided or action is 'directions'
     elif destination or action == "directions" or (origin and destination):
-        # Default origin to user's saved home location if omitted
-        orig_val = _resolve_location_alias(origin)
+        # "From here" resolves to the live position, not the saved home — see
+        # _resolve_origin_for_directions.
+        orig_val = _resolve_origin_for_directions(origin)
         dest_val = _resolve_location_alias(destination)
         result = get_directions(origin=orig_val, destination=dest_val, mode=str(mode), open_map=open_map)
     # Places request: if query is provided or action is 'places'
@@ -790,10 +979,10 @@ def maps_navigator(
         loc_val = location
         if not loc_val or any(k in str(query) for k in ("အနီး", "အနီးအနား", "nearby")):
             loc_val = _get_user_home_location()
-        result = find_places(query=str(query or ""), location=_resolve_location_alias(loc_val))
+        result = find_places(query=str(query or ""), location=_resolve_location_alias(loc_val), open_map=open_map)
     elif origin and not destination:
         # User only gave one location, assume searching for that place
-        result = find_places(query=str(origin), location=None)
+        result = find_places(query=str(origin), location=None, open_map=open_map)
     else:
         # Default fallback: show current location with map
         result = get_current_location(open_map=open_map)
@@ -818,12 +1007,16 @@ TOOL = {
     "name": "maps_navigator",
     "description": (
         "Google Maps navigation, places finder, and user current location. "
-        "Call this whenever the user asks about their location ('ငါ့တည်နေရာ', "
-        "'ငါဘယ်ရောက်နေလဲ', 'လက်ရှိရောက်နေတဲ့နေရာ', 'my location', 'where am I'), "
-        "or wants to view/open their location on Google Maps ('google map နဲ့ ပြ', 'map ဖွင့်ပြ'), "
-        "or asks for travel directions/duration between points (modes: driving, "
-        "walking, transit), or searches for nearby places/hospitals/restaurants. "
-        "Output is formatted in clean, natural Burmese with Google Maps links."
+        "Use action='directions' when the user asks how long a trip takes or how "
+        "far a place is ('ခရီးသွားချိန်', 'ဘယ်လောက်ကြာလဲ', 'how long', 'how far', "
+        "'distance') — it returns distance, duration and a route. Use "
+        "action='places' to find/search a place, restaurant, hospital, hotel, "
+        "bank or shop. Use action='current_location' for the user's own location "
+        "or address ('ငါ့တည်နေရာ', 'where am I'). For directions, leave origin "
+        "empty when the user means 'from here' — it defaults to their live "
+        "location, so 'how far is X from here' works without them naming a "
+        "starting point. Set open_map=True to also open Google Maps in the "
+        "browser. Output is clean, natural Burmese with links."
     ),
     "parameters": {
         "type": "OBJECT",
@@ -831,7 +1024,7 @@ TOOL = {
             "action": {
                 "type": "STRING",
                 "enum": ["directions", "places", "current_location"],
-                "description": "Operation to perform: 'directions' to navigate, 'places' to search places, 'current_location' to get user's current or home location.",
+                "description": "Operation: 'directions' = travel time, duration, distance or navigation between two points; 'places' = search for a place/restaurant/hospital/hotel; 'current_location' = the user's current or home location.",
             },
             "open_map": {
                 "type": "BOOLEAN",
@@ -839,7 +1032,7 @@ TOOL = {
             },
             "origin": {
                 "type": "STRING",
-                "description": "Starting location for directions (e.g. 'Yangon Central Railway Station', 'Sule Pagoda').",
+                "description": "Starting location for directions (e.g. 'Yangon Central Railway Station', 'Sule Pagoda'). Omit this when the user means 'from here' / 'ဒီကနေ' — it then defaults to their live current location.",
             },
             "destination": {
                 "type": "STRING",

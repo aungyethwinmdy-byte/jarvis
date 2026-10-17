@@ -6027,8 +6027,15 @@ class MainWindow(QMainWindow):
 
     def _on_setup_done(self, key: str, os_name: str):
         os.makedirs(CONFIG_DIR, exist_ok=True)
+        # Merge, never overwrite. This runs again whenever the setup overlay is
+        # shown after an auth error, and the old write replaced the whole file
+        # with just these two keys — silently discarding the maps key, voice,
+        # user name and file-access roots every time a key was re-entered.
+        data = _read_full_config()
+        data["gemini_api_key"] = key
+        data["os_system"] = os_name
         API_FILE.write_text(
-            json.dumps({"gemini_api_key": key, "os_system": os_name}, indent=4),
+            json.dumps(data, indent=4),
             encoding="utf-8",
         )
         self._ready = True

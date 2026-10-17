@@ -86,7 +86,11 @@ def _check_unread(service, max_results: int = 5) -> str:
             q="is:unread",
             maxResults=max_results,
         ).execute()
+    except TimeoutError:
+        return "⚠️ Gmail စစ်ဆေးရာတွင် အချိန်ပြည့်သွားပါသည် (VPN သို့မဟုတ် အင်တာနက်လိုင်း စစ်ဆေးပေးပါခင်ဗျာ)။"
     except Exception as e:
+        if "timed out" in str(e).lower() or "timeout" in str(e).lower():
+            return "⚠️ Gmail စစ်ဆေးရာတွင် အချိန်ပြည့်သွားပါသည် (VPN သို့မဟုတ် အင်တာနက်လိုင်း စစ်ဆေးပေးပါခင်ဗျာ)။"
         return f"⚠️ အီးမေးလ်များ စစ်ဆေးရာတွင် အမှားတစ်ခု ဖြစ်ပေါ်ခဲ့သည်: {e}"
 
     messages = res.get("messages", [])
@@ -231,7 +235,7 @@ def gmail_action(parameters: dict | None = None, player=None, session_memory=Non
     to = params.get("to", "").strip()
     subject = params.get("subject", "").strip()
     body = params.get("body", "").strip()
-    max_results = int(params.get("max_results", 5))
+    max_results = int(params.get("max_results", 3))
 
     service, err = get_gmail_service()
     if not service:

@@ -6,7 +6,8 @@
 
 WHY JARVIS DOES NOT COLLECT OR ANALYSE ANYTHING ITSELF
     The newsroom already owns that work. Its auto_runner wakes every hour,
-    scrapes PPIB, BBC Burmese and The Irrawaddy, runs each article through an
+    scrapes PPIB, BBC Burmese, The Irrawaddy and DVB Burmese, runs each article
+    through an
     LLM into a "Format A" editorial report with cross-source correlation and a
     neutrality pass, and stores the result. Duplicating any of it here would
     mean two collectors racing, two sets of credentials, and two answers to
@@ -81,6 +82,10 @@ def env_path() -> Path:
     code, but with a fallback so this module still imports (and still reports
     a clean "unavailable") if the config layer is not importable yet.
     """
+    import os
+    override = os.environ.get("JARVIS_NEWSROOM_ENV")
+    if override:
+        return Path(override).expanduser()
     try:
         from memory.config_manager import get_newsroom_env_path
         p = get_newsroom_env_path()
@@ -669,6 +674,7 @@ OUTLET_NAMES = {
     "ppib": "PPIB",
     "bbcburmese": "BBC Burmese",
     "irrawaddy": "The Irrawaddy",
+    "dvb": "DVB Burmese",
 }
 
 # The user says the name in Burmese, in English, or as an abbreviation, so the
@@ -681,6 +687,7 @@ OUTLET_ALIASES: dict[str, tuple[str, ...]] = {
              "နိုင်ငံပိုင်မီဒီယာ", "အစိုးရသတင်း", "state media"),
     "bbcburmese": ("bbc burmese", "bbcburmese", "bbc", "ဘီဘီစီမြန်မာ", "ဘီဘီစီ"),
     "irrawaddy": ("the irrawaddy", "irrawaddy", "ဧရာဝတီ", "ဒီအီရာဝတီ"),
+    "dvb": ("dvb burmese", "dvbburmese", "dvb", "ဒီဗွီဘီ", "ဒီဗီဘီ"),
 }
 
 
@@ -1874,10 +1881,10 @@ def format_story_summary(story: dict, report: Optional[dict]) -> str:
 def other_outlet_names(target: dict) -> list[str]:
     """The other outlets a comparison actually checks.
 
-    Two of them — and saying so out loud is the point. The newsroom collects
-    three outlets, so "is this in the other papers?" can only ever mean "did the
-    other two carry it". Naming them is what makes a "no" answer judgeable: the
-    user can see the search covered two papers, not the news cycle, and decide
+    Three of them — and saying so out loud is the point. The newsroom collects
+    four outlets, so "is this in the other papers?" can only ever mean "did the
+    other three carry it". Naming them is what makes a "no" answer judgeable: the
+    user can see the search covered three papers, not the news cycle, and decide
     whether that is enough for what they are doing.
 
     The source outlet is excluded — it is not "another outlet" to itself.
@@ -1898,17 +1905,17 @@ def format_comparison(story: dict, coverage: dict[str, list[dict]],
     """Who else carried the story, and how their version compares.
 
     THE SCOPE IS PART OF THE ANSWER
-        The newsroom holds three outlets, so "no other outlet has it" means "not
-        PPIB, not BBC Burmese, not The Irrawaddy" — a statement about three
-        papers, never about the news cycle. The searched outlets are therefore
-        always named, and the answer never claims more than it checked.
+        The newsroom holds four outlets, so "no other outlet has it" means "not
+        PPIB, not BBC Burmese, not The Irrawaddy, not DVB Burmese" — a statement
+        about four papers, never about the news cycle. The searched outlets are
+        therefore always named, and the answer never claims more than it checked.
 
         An earlier version of this also read four live feeds from outside the
         newsroom and folded them into the same list. It was removed on the user's
         instruction, and the reason is worth keeping: those feeds are a
         different and much weaker source — a headline and a date, matched on
         shared words — so listing them beside an analysed report presented a
-        headline match with the authority of an analysis. The newsroom's three
+        headline match with the authority of an analysis. The newsroom's four
         outlets are the system; anything else is a second system with its own
         registry, and the two must not be blended into one answer.
 

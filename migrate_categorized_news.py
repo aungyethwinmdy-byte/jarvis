@@ -29,12 +29,19 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sys
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 
-sys.path.insert(0, r"E:\Mark-LIV-main")
+# Portable: this script lives in the project root, so resolve imports from the
+# script's own directory instead of the hardcoded E:\Mark-LIV-main. An
+# explicit JARVIS_PROJECT_DIR env var still wins (e.g. a relocated install).
+_PROJECT_DIR = os.environ.get("JARVIS_PROJECT_DIR") or str(
+    Path(__file__).resolve().parent)
+sys.path.insert(0, _PROJECT_DIR)
 
 from dotenv import dotenv_values                            # noqa: E402
 
@@ -42,7 +49,7 @@ from core import reporter_client as rc                       # noqa: E402
 from core.reporter_client import content_rows                # noqa: E402
 from core import jarvis_categories as JC                     # noqa: E402
 
-JARVIS_ENV = r"E:\AI_NEWSROOM\.env"
+JARVIS_ENV = os.environ.get("JARVIS_NEWSROOM_ENV") or r"E:\AI_NEWSROOM\.env"
 TABLE = "categorized_news"
 CHUNK = 200
 

@@ -160,7 +160,7 @@ def news_search(parameters: dict = None, player=None, session_memory=None,
     out.append("📰 မြန်မာ့အလင်း / ကြေးမုံ (နိုင်ငံပိုင်သတင်းစာ)")
     out.append(state_text)
     out.append("")
-    out.append("📻 PPIB / BBC Burmese / The Irrawaddy")
+    out.append("📻 PPIB / BBC Burmese / The Irrawaddy / DVB Burmese")
     out.append(room_text)
     out.append("")
 
@@ -185,7 +185,7 @@ TOOL = {
     "description": (
         "Search BOTH news databases at once and report them separately: the "
         "state papers (မြန်မာ့အလင်း, ကြေးမုံ) and the independent outlets "
-        "(PPIB, BBC Burmese, The Irrawaddy). "
+        "(PPIB, BBC Burmese, The Irrawaddy, DVB Burmese). "
         "Use when the user asks about a topic WITHOUT naming a paper — "
         "'ပညာရေးအကြောင်း သတင်းရှိလား', 'ဆီဈေး အကြောင်း ဘာရေးထားလဲ'. "
         "If the user NAMES a paper, use reporter_news or newsroom_search "

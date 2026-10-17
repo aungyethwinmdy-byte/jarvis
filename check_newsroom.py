@@ -229,6 +229,8 @@ def check_outlet_tool() -> None:
         ("The Irrawaddy", "irrawaddy"),
         ("PPIB", "ppib"), ("ppib", "ppib"), ("သမ္မတရုံး", "ppib"),
         ("နိုင်ငံပိုင်မီဒီယာ", "ppib"),
+        ("DVB", "dvb"), ("dvb", "dvb"), ("ဒီဗွီဘီ", "dvb"),
+        ("DVB Burmese", "dvb"),
     ]
     bad = [(s, nr.resolve_outlet(s)[0], want) for s, want in cases
            if nr.resolve_outlet(s)[0] != want]
@@ -293,7 +295,7 @@ def check_outlet_tool() -> None:
     if "မဖော်ထုတ်နိုင်ပါ" not in unknown:
         _fail("an unmonitored outlet did not produce the honest refusal")
     else:
-        _ok("an unmonitored outlet is refused with the three it does have")
+        _ok("an unmonitored outlet is refused with the four it does have")
 
 
 # ── 3c. story resolution + coverage ──────────────────────────────────────────
@@ -487,8 +489,8 @@ def check_story_matching() -> None:
     else:
         _ok("a match names the outlet, its headline and the shared phrases")
 
-    # ── the scope is the newsroom's three outlets, and nothing else ──
-    # An earlier version also read feeds from outside the newsroom — DVB, RFA,
+    # ── the scope is the newsroom's four outlets, and nothing else ──
+    # An earlier version also read feeds from outside the newsroom — RFA,
     # Myanmar Now, Than Lwin Times — which come from a SEPARATE registry
     # (`config/api_keys.json → news_sources`, `actions/web_search.py →
     # OUTLET_REGISTRY`). Two outlet lists exist in this project and they are not
@@ -500,13 +502,13 @@ def check_story_matching() -> None:
         _fail(f"other_outlet_names listed an outlet twice: {names}")
     elif "bbcburmese" in keys_seen:
         _fail("other_outlet_names listed the story's own outlet as an other outlet")
-    elif set(keys_seen) != {"ppib", "theirrawaddy"}:
-        _fail(f"other_outlet_names is not the newsroom's other two outlets: {names}")
+    elif set(keys_seen) != {"ppib", "theirrawaddy", "dvbburmese"}:
+        _fail(f"other_outlet_names is not the newsroom's other three outlets: {names}")
     else:
-        _ok(f"the searched list is exactly the newsroom's other two outlets ({len(names)})")
+        _ok(f"the searched list is exactly the newsroom's other three outlets ({len(names)})")
 
     stray = [n for n in names if any(
-        s in n.upper() for s in ("DVB", "RFA", "GNLM", "MIZZIMA", "FRONTIER", "THAN LWIN"))]
+        s in n.upper() for s in ("RFA", "GNLM", "MIZZIMA", "FRONTIER", "THAN LWIN"))]
     if stray:
         _fail(f"a non-newsroom outlet reached the comparison: {stray}")
     else:

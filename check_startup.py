@@ -92,18 +92,22 @@ def show_config() -> list[str]:
     print(f"  newsroom quiet hours: {cm.get_newsroom_quiet_hours()[0]:02d}:00-"
           f"{cm.get_newsroom_quiet_hours()[1]:02d}:00 MMT")
 
-    # _news_settings() lives in actions/web_search.py, which is edited often and
-    # has been shipped in a state where it was missing. A bare call here would
-    # turn a missing function into a crash of this whole script — which is
-    # precisely what it used to do.
+    # Where the briefing gets its news. This block used to probe
+    # _news_settings() in actions/web_search.py — a function that never existed
+    # in any commit of that module — so a perfectly healthy machine printed
+    # "briefing engines: UNAVAILABLE" on every run. The web fallback it was
+    # meant to configure was removed on purpose (see the docstring at the top of
+    # actions/daily_briefing.py), leaving the AI Newsroom as the single source.
+    # Check the thing that can actually break instead: that the briefing is
+    # still wired to a source.
     try:
-        from actions import web_search as ws
-        s = ws._news_settings()
-        print(f"  briefing engines    : world={s['world_engine']}, "
-              f"myanmar={s['myanmar_engine']}")
+        from actions import daily_briefing as db
+        if not callable(getattr(db, "_newsroom_briefing", None)):
+            raise AttributeError("daily_briefing._newsroom_briefing is missing")
+        print("  briefing source     : AI Newsroom only (single source by design)")
     except Exception as e:
-        print(f"  briefing engines    : UNAVAILABLE — {type(e).__name__}: {e}")
-        print("      note: daily_briefing will fall back to the AI Newsroom only.")
+        problems.append(f"daily_briefing is not wired to a source: {type(e).__name__}: {e}")
+        print(f"  briefing source     : BROKEN — {type(e).__name__}: {e}")
     return problems
 
 
@@ -137,7 +141,11 @@ def check_tools() -> list[str]:
     from core.plugin_loader import discover_plugins
 
     inline = [t["name"] for t in M.TOOL_DECLARATIONS]
-    registry = discover_actions(ROOT / "actions")
+    # Pass the inline names as reserved, exactly as main.py does. An action whose
+    # name is already inline (maps_navigator) is rejected in the real app, so
+    # scanning without `reserved_names` reports a collision that cannot happen
+    # at runtime — a false failure of this very check.
+    registry = discover_actions(ROOT / "actions", reserved_names=set(inline))
     plugins = discover_plugins(ROOT / "plugins",
                                core_tool_names=set(inline) | registry.names())
 

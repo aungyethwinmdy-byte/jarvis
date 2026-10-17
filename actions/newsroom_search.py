@@ -1,14 +1,19 @@
 """Search the AI Newsroom archive for a topic.
 
-WHAT THIS ADDS OVER actions/daily_briefing.py
-    daily_briefing answers "what's new" from the open web — DuckDuckGo and
-    Google News RSS — which is broad but shallow: a headline, a date, a link.
+WHAT THIS ADDS OVER actions/today_briefing.py
+    today_briefing answers "what's new today" from the newsroom's analysed
+    reports — broad but shallow on any single subject.
 
-    This reaches the part the web path cannot: the archive. Every article PPIB,
-    BBC Burmese and The Irrawaddy publish is collected hourly by AI Newsroom,
+    This reaches the part the briefing cannot: the archive. Every article PPIB,
+    BBC Burmese, The Irrawaddy and DVB Burmese publish is collected hourly by
+    AI Newsroom,
     analysed into a cross-source editorial report, and kept. So JARVIS can
     answer "has there been anything about X" from a curated, source-attributed
     store rather than from whatever a search engine feels like ranking today.
+
+    (An older version of this docstring described daily_briefing as answering
+    from the open web — DuckDuckGo and Google News RSS. That has been false
+    since 2026-10-13: the briefing reads the newsroom DB only. Corrected.)
 
 WHY THE QUERY IS NEVER TRANSLATED
     The newsroom's notes record a real bug: a Burmese question about Myanmar's
@@ -43,7 +48,8 @@ TOOL = {
     "name": "newsroom_search",
     "description": (
         "Search the AI Newsroom archive — every article collected from PPIB, "
-        "BBC Burmese and The Irrawaddy, analysed and stored — for a topic. Use "
+        "BBC Burmese, The Irrawaddy and DVB Burmese, analysed and stored — for a "
+        "topic. Use "
         "this when the user asks whether there has been news about a specific "
         "subject, person, place or event: 'ဒီအကြောင်းအရာ သတင်းရှိလား', "
         "'ဘယ်လိုသတင်းတွေရှိလဲ', 'any news about X'. Pass the user's query "

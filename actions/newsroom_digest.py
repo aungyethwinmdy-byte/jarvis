@@ -2,8 +2,9 @@
 
 WHY THIS IS SEPARATE FROM daily_briefing
     daily_briefing is the "latest few items" answer — a quick scan. This is the
-    whole day merged into one report: every PPIB, BBC Burmese and The Irrawaddy
-    article of the day, correlated across sources and written up as a single
+    whole day merged into one report: every PPIB, BBC Burmese, The Irrawaddy
+    and DVB Burmese article of the day, correlated across sources and written up
+    as a single
     Format B digest by the newsroom's analyzer (see daily_digest.py there).
 
     A journalist wants both, and they are different questions: "what just

@@ -33,7 +33,15 @@ def _is_blocked(topic: str) -> bool:
 # ── Slug / hash helpers ────────────────────────────────────────────────────────
 
 def _slug(topic: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "_", topic.lower().strip())[:40].strip("_")
+    clean = re.sub(r"[^a-z0-9]+", "_", topic.lower().strip())[:40].strip("_")
+    if clean:
+        return clean
+    # Burmese-only (or any non-Latin) topics collapse to "" above — two
+    # different topics would then share one storage key and silently overwrite
+    # each other (NEWS_AUDIT 2026-10-13). Hash the raw topic instead: stable,
+    # unique, and never empty.
+    return "u_" + hashlib.md5(
+        topic.strip().encode("utf-8", errors="ignore")).hexdigest()[:12]
 
 def _title_hash(title: str) -> str:
     return hashlib.md5(title.encode("utf-8", errors="ignore")).hexdigest()[:12]
@@ -44,7 +52,22 @@ def _title_hash(title: str) -> str:
 def _load() -> dict:
     from memory.memory_manager import load_memory
     data = load_memory().get("monitors", {})
-    return data if isinstance(data, dict) else {}
+    if not isinstance(data, dict):
+        return {}
+    # One-time migration (2026-10-17): Burmese-only topics used to collapse to
+    # the "" key, so "ပညာရေး" and "ကျန်းမာရေး" overwrote each other. Re-key
+    # anything whose stored key no longer matches what _slug() produces.
+    fixed, changed = {}, False
+    for key, val in data.items():
+        topic = val.get("topic", key) if isinstance(val, dict) else key
+        want = _slug(str(topic))
+        if want != key:
+            changed = True
+        fixed[want] = val
+    if changed:
+        _save(fixed)
+        print("[Monitor] migrated monitor keys to the fixed slug scheme")
+    return fixed
 
 def _save(monitors: dict) -> None:
     from memory.memory_manager import load_memory, MEMORY_PATH, _lock
@@ -83,6 +106,10 @@ def add_monitor(topic: str) -> str:
 
 def remove_monitor(topic: str) -> str:
     topic = topic.strip().lower()
+    if not topic:
+        # Without this guard, "" matches every stored topic via the partial
+        # fallback below and the first monitor gets deleted by accident.
+        return "Please specify a topic to remove."
     monitors = _load()
     # exact slug match first
     slug = _slug(topic)

@@ -591,8 +591,8 @@ def _format_single_outlet_news(outlet_info: dict, items: list[dict], subject: st
 
 
 # ── THE WORLD HALF ───────────────────────────────────────────────────────────
-# The newsroom (E:\AI_NEWSROOM) is Myanmar-only — PPIB, BBC Burmese and The
-# Irrawaddy — so world news has always been this module's job. These are the two
+# The newsroom (E:\AI_NEWSROOM) is Myanmar-only — PPIB, BBC Burmese, The
+# Irrawaddy and DVB Burmese — so world news has always been this module's job. These are the two
 # wires, and they are fetched through Google News RSS because that is the only
 # route that answers from this machine. Measured 2026-09-27:
 #
@@ -682,18 +682,28 @@ def world_briefing(limit: int = 3) -> str:
 
 # ── MAIN NEWS & BRIEFING HANDLER ─────────────────────────────────────────────
 def _news(query: str) -> str:
-    # ၁။ သီးခြား Outlet တစ်ခုခုကို မေးထားခြင်း ဟုတ်/မဟုတ် စစ်ဆေးခြင်း
+    # WORLD NEWS ONLY. Measured 2026-10-13 (NEWS_AUDIT): the old version also
+    # served a Myanmar half (Irrawaddy/DVB/RFA/BBC-Burmese RSS + PPIB scrape)
+    # labelled "[DAILY BRIEFING]" — the same name as the newsroom's analysed
+    # briefing, answering the same question with un-analysed scrapes. The
+    # TOOL contract above says Myanmar news belongs to the newsroom tools
+    # (today_briefing, newsroom_search, newsroom_outlet_news); the Myanmar
+    # half is removed so this function cannot contradict it. Myanmar-outlet
+    # or Myanmar-topic queries are answered with a routing hint, never with
+    # a wrong-scope result.
     outlet_info, subject = _detect_outlet(query)
-    if outlet_info:
-        print(f"[WebSearch] 🎯 Specific outlet detected: {outlet_info['name']} (Subject: {subject!r})")
+    if outlet_info and outlet_info.get("scope") == "world":
+        print(f"[WebSearch] 🎯 World outlet detected: {outlet_info['name']} (Subject: {subject!r})")
         try:
             items = _fetch_single_outlet(outlet_info, subject=subject, limit=6)
         except Exception as e:
             print(f"[WebSearch] ⚠️ Specific outlet failed: {e}")
             items = []
         return _format_single_outlet_news(outlet_info, items, subject=subject)
+    if outlet_info:
+        return _myanmar_hint()
 
-    # ၂။ သီးခြား Outlet မဟုတ်ပါက ပုံမှန် Daily Briefing ပုံစံဖြင့် ကမ္ဘာ/မြန်မာ ပေါင်းစပ်ထုတ်ယူခြင်း
+    # ပုံမှန် World briefing — ကမ္ဘာ့သတင်း wires သာ
     from concurrent.futures import ThreadPoolExecutor
 
     def _safe_call(label, fn):
@@ -710,27 +720,8 @@ def _news(query: str) -> str:
         # news is — while both sound confident.
         return _safe_call("world wires", lambda: _world_items())
 
-    def _get_myanmar():
-        results = []
-        # Direct RSS သတင်းဌာနများ (Irrawaddy, DVB, RFA, BBC Burmese, GNLM)
-        rss_targets = [info for info in OUTLET_REGISTRY.values() if info["type"] == "rss"]
-        for info in rss_targets:
-            results.extend(_safe_call(
-                info["name"],
-                lambda info=info: _fetch_rss_feed(info["name"], info["target"], limit=2),
-            ))
-        # PPIB Scrape
-        results.extend(_safe_call(
-            "PPIB",
-            lambda: _scrape_listing("https://www.ppib.gov.mm/", limit=2),
-        ))
-        return results
-
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        f_world = pool.submit(_get_world)
-        f_mm = pool.submit(_get_myanmar)
-        world_raw = f_world.result()
-        mm_raw = f_mm.result()
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        world_raw = pool.submit(_get_world).result()
 
     # ရက်စွဲစီခြင်းနှင့် Formatting
     def _sort(lst, n):
@@ -744,20 +735,31 @@ def _news(query: str) -> str:
                 out.append(r)
         return out[:n]
 
-    world = _sort(world_raw, 2)
-    myanmar = _sort(mm_raw, 3)
+    world = _sort(world_raw, 5)
 
     today = timefmt.now_mmt().strftime("%Y-%m-%d")
-    lines = [f"[DAILY BRIEFING] ယနေ့ရက်စွဲ: {today}", "", "=== ကမ္ဘာ့သတင်း ==="]
+    lines = [f"[WORLD NEWS] ယနေ့ရက်စွဲ: {today}", ""]
     for i, r in enumerate(world, 1):
-        when = _date_label(r.get("date"))
-        lines.append(f"{i}. {r['title']} [{r['source']}]{f' ({when})' if when else ''}")
-    lines += ["", "=== မြန်မာနိုင်ငံသတင်း ==="]
-    for i, r in enumerate(myanmar, 1):
         when = _date_label(r.get("date"))
         lines.append(f"{i}. {r['title']} [{r['source']}]{f' ({when})' if when else ''}")
 
     return "\n".join(lines).strip()
+
+
+def _myanmar_hint() -> str:
+    """Routing hint for Myanmar news questions that reach this module directly.
+
+    The model path goes through main.py::_news_route and never sees this; it
+    only fires when web_search() is called directly with a Myanmar news
+    question. Answering with world wires would be a wrong-scope answer, and
+    the old Myanmar scrape half was removed on the owner's instruction — so
+    say plainly where the answer lives instead of guessing.
+    """
+    return ("မြန်မာသတင်းအတွက် ဒီ tool ကို မသုံးပါနှင့်။ "
+            "today_briefing (ဒီနေ့ ဘာထူးလဲ), newsroom_outlet_news "
+            "(သတင်းဌာနအလိုက်), သို့မဟုတ် newsroom_search (အကြောင်းအရာရှာရန်) "
+            "ကို သုံးပါ — ၎င်းတို့က AI Newsroom ၏ သုံးသပ်ပြီးသား အချက်အလက် "
+            "ဖြစ်သည်။")
 
 
 def web_search(parameters: dict, response=None, player=None, session_memory=None) -> str:
@@ -770,10 +772,27 @@ def web_search(parameters: dict, response=None, player=None, session_memory=None
 
     print(f"[WebSearch] 🔍 mode={mode!r} query={query!r}")
 
-    # မေးခွန်းထဲတွင် သတင်း သို့မဟုတ် သတင်းဌာန နာမည်ပါလာပါက mode='news' အဖြစ် အလိုအလျောက် သတ်မှတ်ခြင်း
+    # News auto-route — narrowed 2026-10-17 (NEWS_AUDIT). The old trigger sent
+    # ANY query containing "သတင်း"/"news"/"ဘာထူးလဲ" into _news(), which then
+    # served the legacy Myanmar scrape mix — contradicting this module's own
+    # TOOL contract ("DO NOT USE THIS FOR A NEWS QUESTION ABOUT WHAT IS
+    # HAPPENING" in Myanmar). Now: world news → _news() (world wires only);
+    # Myanmar news → a routing hint naming the newsroom tools. The model path
+    # is intercepted earlier by main.py::_news_route, so this branch only
+    # fires on direct/internal calls.
+    _WORLD_MARKERS = ("ကမ္ဘာ့", "ကမ္ဘာ", "နိုင်ငံတကာ", "world news",
+                      "international")
     outlet_info, _ = _detect_outlet(query)
-    if mode == "news" or outlet_info or any(w in query for w in ("သတင်း", "news", "ဘာထူးလဲ")):
+    if mode == "news":
         return _news(query)
+    if outlet_info:
+        return _news(query) if outlet_info.get("scope") == "world" \
+            else _myanmar_hint()
+    ql = query.lower()
+    if any(w in ql for w in _WORLD_MARKERS):
+        return _news(query)
+    if any(w in query for w in ("သတင်း", "news", "ဘာထူးလဲ")):
+        return _myanmar_hint()
 
     # အခြား ပုံမှန်ရှာဖွေမှုများအတွက်
     # THE GENERAL-SEARCH BRANCH WAS A PLACEHOLDER. It read

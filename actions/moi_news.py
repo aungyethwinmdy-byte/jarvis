@@ -373,7 +373,7 @@ def moi_news(parameters: dict = None, player=None, session_memory=None, **_) -> 
                         f"ဝက်ဘ်ဆိုဒ်က ဒီသတင်းအတွက် စာသား မပေးထားပါ။\n"
                         f"ခေါင်းစဉ်နဲ့ လင့်ကိုတော့ ဖွင့်ကြည့်လို့ ရပါတယ်: {mc.BASE}{url}")
             return (f"⚠️ {mc.BASE}{url} ရဲ့ စာသားကို **ဖတ်လို့ မရပါ** — စာမျက်နှာကတော့ "
-                    f"ရှိပါတယ်၊ ကျွန်တော် စာသားကို ရှာမတွေ့တာပါ။\n"
+                    f"ရှိပါတယ်၊ ကျွန်မ စာသားကို ရှာမတွေ့တာပါ။\n"
                     f"ဒါက 'သတင်း မရှိဘူး' လို့ မဆိုလိုပါ။ ခေါင်းစဉ်နဲ့ လင့်ကိုတော့ "
                     f"ဖွင့်ကြည့်လို့ ရပါတယ်: {mc.BASE}{url}")
         # The search result list carries no date, so the article's own date is

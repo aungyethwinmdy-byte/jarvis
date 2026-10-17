@@ -14,7 +14,7 @@ WHY THIS IS NOT newsroom_search
 WHY THE OUTLET IS RESOLVED AND NOT PASSED THROUGH
     The user says the name however they say it — "BBC", "ဘီဘီစီ", "ဘီဘီစီ မြန်မာ",
     "ဧရာဝတီ", "သမ္မတရုံး" — and none of those is a `source_id`. resolve_outlet()
-    maps all of them. When it cannot, this says so and names the three outlets
+    maps all of them. When it cannot, this says so and names the four outlets
     it does have, rather than guessing: answering about the wrong outlet is a
     confident wrong answer, which is worse than admitting the miss.
 """
@@ -40,8 +40,8 @@ def newsroom_outlet_news(parameters, player=None, session_memory=None) -> str:
     source_id, outlet_name = nr.resolve_outlet(outlet_raw)
     if not source_id:
         return (f"'{outlet_raw}' ဆိုတဲ့ သတင်းဌာနကို မဖော်ထုတ်နိုင်ပါ။ "
-                f"လက်ရှိ စောင့်ကြည့်နေတဲ့ သတင်းဌာန သုံးခုက "
-                f"PPIB၊ BBC Burmese နဲ့ The Irrawaddy ဖြစ်ပါတယ်။")
+                f"လက်ရှိ စောင့်ကြည့်နေတဲ့ သတင်းဌာန လေးခုက "
+                f"PPIB၊ BBC Burmese၊ The Irrawaddy နဲ့ DVB Burmese ဖြစ်ပါတယ်။")
 
     target = now_mmt().date() - timedelta(days=days_ago)
     items = nr.outlet_news(source_id, target, limit=6)
@@ -64,7 +64,8 @@ TOOL = {
         "what it has published — 'BBC မှာ ဒီနေ့သတင်းတွေ ဘာထူးလဲ', "
         "'ဧရာဝတီ မနေ့က သတင်း', 'PPIB ဒီနေ့ ဘာတွေတင်လဲ', "
         "'what did the Irrawaddy publish today', 'any BBC Burmese news "
-        "yesterday'. The three outlets are PPIB, BBC Burmese and The Irrawaddy, "
+        "yesterday'. The four outlets are PPIB, BBC Burmese, The Irrawaddy and "
+        "DVB Burmese, "
         "and the user may name them in Burmese or English. Pass the outlet name "
         "EXACTLY as the user said it, and set days_ago to 0 for today, 1 for "
         "yesterday, 2 for the day before. If NO outlet is named, use "

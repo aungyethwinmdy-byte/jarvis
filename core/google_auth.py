@@ -124,13 +124,21 @@ def get_credentials(interactive: bool = True) -> Tuple[Optional[Credentials], st
         return None, f"⚠️ Google Authentication မအောင်မြင်ပါ: {e}"
 
 
-def get_service(api_name: str, api_version: str) -> Tuple[Optional[Any], str]:
-    """Get a Google API client service instance."""
-    creds, err = get_credentials()
+import httplib2
+import google_auth_httplib2
+
+_HTTP_TIMEOUT = 10.0  # seconds; bounded to prevent freezing Gemini Live WebSockets
+
+
+def get_service(api_name: str, api_version: str, timeout: float = _HTTP_TIMEOUT) -> Tuple[Optional[Any], str]:
+    """Get a Google API client service instance with a bounded network timeout."""
+    creds, err = get_credentials(interactive=False)
     if not creds:
         return None, err
     try:
-        service = build(api_name, api_version, credentials=creds, cache_discovery=False)
+        http = httplib2.Http(timeout=timeout)
+        authed_http = google_auth_httplib2.AuthorizedHttp(creds, http=http)
+        service = build(api_name, api_version, http=authed_http, cache_discovery=False)
         return service, ""
     except Exception as e:
         return None, f"⚠️ Google {api_name} Service ချိတ်ဆက်မှု မအောင်မြင်ပါ: {e}"
