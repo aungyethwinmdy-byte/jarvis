@@ -33,11 +33,18 @@ WHAT A PASS MEANS
     synthesis path — not just the client — returns audio for a real Burmese line.
     Start the assistant afterwards and the greeting should be in her voice.
 
+RUN THIS BEFORE THE ASSISTANT, NOT AFTER
+    The notebook loads the F5 checkpoint lazily, inside the session's first
+    /speak request, and that has taken minutes. This script is that request.
+    Paying it here means the assistant's own first reply is quick; skipping it
+    means the greeting arrives in the fallback voice instead.
+
 THE CACHE CAN LIE TO YOU, SO SECTION 1 IGNORES IT
     Rendered lines are kept in voice/cache keyed by text. A line rendered before
     the tunnel died still plays, from disk, with no tunnel involved — so a
-    correct-sounding reply is not a working endpoint. `probe()` goes straight to
-    the URL, which is why it is asked first and asked separately.
+    correct-sounding reply is not a working endpoint. `health()` and `probe()`
+    both go straight to the URL, which is why they are asked first and asked
+    separately.
 """
 from __future__ import annotations
 
@@ -82,9 +89,15 @@ def main() -> int:
 
     _head("1. THE TUNNEL")
     print(f"  {colab_tts.describe()}")
-    ok, detail = colab_tts.probe()
-    passed &= _ok("the endpoint synthesised a line", ok, detail)
-    if not ok:
+
+    # Two questions, because they have different answers and one of them is
+    # cheap. The health route says whether anything is behind the URL at all;
+    # only /speak can say whether the voice works, and its first call is minutes
+    # long by design. Asking only the second one made a cold-but-healthy server
+    # look like a dead tunnel — measured 2026-10-18.
+    live, why = colab_tts.health()
+    passed &= _ok("something is answering behind the URL", live, why)
+    if not live:
         print()
         print("  The Colab notebook is not answering. That is expected whenever")
         print("  the runtime has stopped, and it is the whole failure this script")
@@ -92,6 +105,24 @@ def main() -> int:
         print("  its tunnel cell prints, paste it into COLAB_URL in")
         print("  voice/colab_tts.py, and run this again.")
         return 1
+
+    print()
+    print("  Now a real synthesis request. This is the session's first, so the")
+    print("  notebook loads the F5 checkpoint inside it: minutes of silence is")
+    print(f"  the expected shape, not a fault. Waiting up to "
+          f"{colab_tts.COLD_TIMEOUT}s...")
+    t0 = time.time()
+    ok, detail = colab_tts.probe()
+    passed &= _ok("the endpoint synthesised a line", ok, detail)
+    if not ok:
+        print()
+        print("  The health route answered, so the tunnel is up and the notebook")
+        print("  is running — the fault is inside /speak. Cell 4's output has the")
+        print("  traceback; the usual cause is the reference WAV, which has to be")
+        print("  uploaded again in every new session (/content/ref_aye_thant.wav).")
+        return 1
+    print(f"  the checkpoint is loaded now — that first line took "
+          f"{time.time() - t0:.0f}s, and the assistant's replies take seconds")
 
     _head("2. THE SETTINGS AND THE REGISTRY")
     voices = custom_voice.load_voices()
