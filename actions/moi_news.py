@@ -73,6 +73,7 @@ from datetime import timedelta
 
 from core import moi_client as mc
 from core import moi_index as ix
+from core import outcome
 from core.timefmt import now_mmt, to_burmese_digits
 
 _MONTHS = ("", "ဇန်နဝါရီ", "ဖေဖော်ဝါရီ", "မတ်", "ဧပြီ", "မေ", "ဇွန်",
@@ -383,14 +384,21 @@ def moi_news(parameters: dict = None, player=None, session_memory=None, **_) -> 
         stamp = mc.article_date(url)
         row = _index_row(url)
         if spoken:
-            return _for_speech_bulletin(url, stamp, row, body)
+            return outcome.untrusted("moi-article",
+                                     _for_speech_bulletin(url, stamp, row, body))
         head = f"**ရင်းမြစ်**: moi.gov.mm ({mc.BASE}{url})"
         if stamp:
             head += f"\n**ရက်စွဲ**: {_date(stamp)}"
         facts = _facts_block(row)
+        story = f"{head}\n\n{body[:2500]}"
         if facts:
-            return f"{head}\n\n{body[:2500]}\n\n{facts}"
-        return f"{head}\n\n{body[:2500]}"
+            story += f"\n\n{facts}"
+        # 2,500 characters of a stranger's prose: the largest single piece of
+        # text this machine did not write, and the reason the boundary exists.
+        # Wrapped WHOLE, head included — `outcome.unwrap()` returns only what is
+        # inside the markers, so a return that were half wrapped would reach the
+        # console with its outer half missing.
+        return outcome.untrusted("moi-article", story)
 
     # ── A term across the sections ──────────────────────────────────────────
     if action in ("search", "find") and term:
@@ -436,7 +444,11 @@ def moi_news(parameters: dict = None, player=None, session_memory=None, **_) -> 
                        + (f" (crawl: {idx_when[:16]})" if idx_when else "")
                        + " — ဒီစာရင်းမှာ ရက်စွဲ ပါပါတယ်။ "
                          "ဒီနေ့အသစ်ဆုံး သတင်း လိုချင်ရင် live မှာ ထပ်စစ်ခိုင်းပါ။")
-            return "\n".join(out).rstrip()
+            # Index cards carry MOI headlines AND summaries — the richest
+            # external text this tool hands back, so the boundary matters most
+            # here. The provenance lines stay inside the wrapper: they are
+            # facts about the answer, meant to be spoken.
+            return outcome.untrusted("moi-index", "\n".join(out).rstrip())
         # ── The index had nothing: live site search + section walk (below). ──
         # **The site's own search first.** One request per page, relevance-ranked,
         # and it reaches the whole archive. Measured 2026-10-03: the page-walk was
@@ -527,7 +539,11 @@ def moi_news(parameters: dict = None, player=None, session_memory=None, **_) -> 
             out.append(f"ℹ️ ကဏ္ဍ တစ်ခုချင်းရဲ့ နောက်ဆုံး စာမျက်နှာ "
                        f"{to_burmese_digits(_SECTION_SEARCH_PAGES)} အထိ ရှာထားတာပါ — "
                        f"အဟောင်းဆုံး သတင်းတွေ ပါမလာနိုင်ပါ။")
-        return "\n".join(out).rstrip()
+        # The cards are moi.gov.mm's own headlines and dates. The scope notes
+        # above them ("the site's search carries no dates") stay INSIDE the
+        # wrapper deliberately: they are facts about the answer that the model
+        # should say, not instructions for it.
+        return outcome.untrusted("moi-search", "\n".join(out).rstrip())
 
     # ── A section's latest ──────────────────────────────────────────────────
     slug = mc.resolve_section(asked) if asked else ""
@@ -595,7 +611,14 @@ def moi_news(parameters: dict = None, player=None, session_memory=None, **_) -> 
     if cards:
         out += ["", f"📅 ရက်စွဲ အကွာအဝေး — {cards[-1]['issue_date']} ကနေ "
                     f"{cards[0]['issue_date']} အထိ"]
-    return "\n".join(out).rstrip()
+    # The section's cards — headline, date, link — come from moi.gov.mm, so they
+    # travel behind the untrusted boundary (core/prompt.txt, [UNTRUSTED CONTENT]).
+    # Everything that returns ABOVE this line does not: `_unreachable`,
+    # `_section_missing` and the "no news in this window" branches are this
+    # machine's own sentences, and the last of them carries a real instruction
+    # ("do not call another news tool") that a wrapper would tell the model to
+    # ignore — the opposite of what it is there for.
+    return outcome.untrusted(f"moi-{slug}", "\n".join(out).rstrip())
 
 
 TOOL = {

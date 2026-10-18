@@ -1560,6 +1560,43 @@ def main() -> int:
     check("our own routing hint is NOT wrapped",
           "_as_data(_myanmar_hint" in _wsrc, False)
 
+    # The newsroom and MOI tools answer with sentences somebody ELSE wrote —
+    # headlines, summaries, dates from PPIB, BBC, Irrawaddy, DVB and moi.gov.mm.
+    # These are checked at the source level because both tools need a live
+    # database to run, and a wrapped answer reads no differently from an
+    # unwrapped one until the model is the one reading it.
+    from actions import newsroom_outlet as nout
+    from actions import moi_news as mno
+    _nout_src = inspect.getsource(nout.newsroom_outlet_news)
+    check("an outlet's headlines are marked as the outlet's words",
+          'outcome.untrusted(f"newsroom-{source_id}"' in _nout_src, True)
+    check("and the fetched answer is the only thing this tool wraps",
+          _nout_src.count("outcome.untrusted("), 1)
+    check("the 'cannot connect' line stays outside the wrapper",
+          'untrusted("သတင်း' in _nout_src, False)
+
+    _moi_src = inspect.getsource(mno.moi_news)
+    check("every fetched branch of moi_news is wrapped",
+          _moi_src.count("outcome.untrusted("), 5)
+    check("the section wrapper names the section it came from",
+          'outcome.untrusted(f"moi-{slug}"' in _moi_src, True)
+    check("the index wrapper says where the cards came from",
+          'outcome.untrusted("moi-index"' in _moi_src, True)
+    check("the article body is wrapped, spoken form included",
+          _moi_src.count('outcome.untrusted("moi-article"'), 2)
+    check("the unreachable/section-unknown helpers stay unwrapped",
+          ("untrusted" not in inspect.getsource(mno._unreachable)
+           and "untrusted" not in inspect.getsource(mno._section_missing)), True)
+    # The "no news in this window" branch mixes both kinds of text: a fetched
+    # headline, and OUR instruction to the model ("do not call another news
+    # tool"). The prompt rule tells the model not to obey instructions found
+    # inside a wrapper, so wrapping that branch would disable the steering it
+    # exists to provide. Both halves are checked.
+    _branch = _moi_src[_moi_src.index("newest = cards[0]")
+                       :_moi_src.index("cards = in_window")]
+    check("the no-news branch keeps our steering line", "ထပ်မခေါ်ပါနှင့်" in _branch, True)
+    check("and keeps it unwrapped", "outcome.untrusted(" in _branch, False)
+
     _head("VERDICT")
     if FAILURES:
         print(f"  {len(FAILURES)} check(s) failed:")
