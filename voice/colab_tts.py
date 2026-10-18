@@ -89,7 +89,7 @@ from pathlib import Path
 import urllib3
 from urllib3.util import Retry, Timeout
 
-COLAB_URL = "https://disabled-neutral-weblog-graham.trycloudflare.com"
+COLAB_URL = "https://serum-penguin-width-cyber.trycloudflare.com"
 
 # One warm line. F5 renders a sentence in a few seconds once the checkpoint is in
 # memory; this is the ceiling that turns a stuck server into the fallback voice.
@@ -341,8 +341,14 @@ def probe(text: str = "ဒေါ်အေးသန့် ပြောနေပ�
     resp = _speak_request(cleaned, timeout)
     if resp.status != 200:
       detail = resp.data[:200].decode("utf-8", "replace")
+      status = resp.status
       resp.release_conn()
-      return False, (f"HTTP {resp.status} after {time.time() - t0:.1f}s: "
+      if status in (520, 522, 523, 524):
+        return False, (f"HTTP {status} after {time.time() - t0:.1f}s — Cloudflare "
+                       f"cut the tunnel at about a hundred seconds with the server "
+                       f"still working; the model is loading, and the next request "
+                       f"will find it loaded: {detail.strip()!r}")
+      return False, (f"HTTP {status} after {time.time() - t0:.1f}s: "
                      f"{detail!r}")
     data = resp.data
     resp.release_conn()

@@ -1,5 +1,5 @@
 # Cell 4: Server + tunnel — JARVIS က ဒီ URL ကို ခေါ်သုံးပါမယ်
-import os, re, subprocess, sys, time
+import os, re, subprocess, sys, time, urllib.request
 
 # အရင် run ထားတဲ့ server/tunnel ရှိရင် အရင်ပိတ် (Run all ကို နှစ်ခါ run ရင်
 # port 5000 မလွတ်လို့ ဒုတိယ server က မတက်နိုင်ပါ)
@@ -135,6 +135,22 @@ def log():
     return {"lines": len(lines), "tail": "".join(lines[-n:])}
 
 
+@app.route("/warm", methods=["GET", "POST"])
+def warm():
+    """Load the model with no tunnel in the way.
+
+    The notebook calls this over localhost before it starts the tunnel, because
+    a Cloudflare quick tunnel cuts any request that takes longer than about a
+    hundred seconds and the first load of this model is minutes. It is a
+    convenience, not a dependency: /speak loads the model itself too.
+    """
+    t0 = time.time()
+    get_tts()
+    elapsed = time.time() - t0
+    print(f"[warm] model ready in {elapsed:.1f}s", flush=True)
+    return {"status": "ok", "seconds": round(elapsed, 1)}
+
+
 @app.route("/", methods=["GET"])
 def health():
     return dict(status="ok", service="f5-myanmar-tts",
@@ -162,6 +178,20 @@ srv = subprocess.Popen([sys.executable, "/content/tts_server.py"],
                        stdout=srv_log, stderr=subprocess.STDOUT, text=True)
 time.sleep(5)
 print("server started, pid:", srv.pid)
+
+# Load the model BEFORE the tunnel exists. A Cloudflare quick tunnel cuts any
+# request longer than about a hundred seconds, and the first load of this model
+# is minutes — so through the tunnel the first /speak can never finish: JARVIS
+# would get a 524 and speak the session's first reply in another voice. Called
+# from here, over localhost, there is no cut at all, and the URL below is not
+# printed until the model is up.
+print("model ကို အရင် load လုပ်ပါမယ် — ပထမဆုံးဆိုရင် 674 MB download လို့ မိနစ်အနည်းငယ် ကြာပါမယ်...")
+try:
+    with urllib.request.urlopen("http://127.0.0.1:5000/warm", timeout=3600) as r:
+        print("  ", r.read().decode("utf-8", "replace")[:200])
+except Exception as e:
+    print(f"  warm မအောင်မြင်ပါ: {type(e).__name__}: {e}")
+    print("  (cell (5) က log ကို ကြည့်ပါ — /speak ပထမဆုံးခေါ်ချိန်မှာ ထပ်ကြိုးစားပါမယ်)")
 
 # Tunnel
 tun = subprocess.Popen(["/tmp/cloudflared", "tunnel", "--url", "http://127.0.0.1:5000"],

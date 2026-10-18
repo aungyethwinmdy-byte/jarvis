@@ -107,26 +107,28 @@ def main() -> int:
         return 1
 
     print()
-    print("  Now a real synthesis request. This is the session's first, so the")
-    print("  notebook loads the F5 checkpoint inside it: minutes of silence is")
-    print(f"  the expected shape, not a fault. Waiting up to "
-          f"{colab_tts.COLD_TIMEOUT}s...")
+    print("  Now a real synthesis request. A v2 notebook loads its model before")
+    print("  it prints the tunnel URL, so this answers in seconds; an older")
+    print("  notebook loads it here, in minutes. Waiting up to")
+    print(f"  {colab_tts.COLD_TIMEOUT}s...")
     t0 = time.time()
     ok, detail = colab_tts.probe()
     passed &= _ok("the endpoint synthesised a line", ok, detail)
     if not ok:
         print()
         print("  The health route answered, so the tunnel is up and the notebook")
-        print("  is running — the fault is inside /speak. The traceback went into")
-        print("  the Colab server's pipe, where no window shows it. Read the time")
-        print("  above: a 500 back in under a second never reached the checkpoint")
-        print("  load, which points at the two things that fail before it — the")
-        print("  reference WAV, which every new runtime wipes")
-        print("  (/content/ref_aye_thant.wav; upload voice/ref_aye_thant.wav")
-        print("  under that name, it is already named correctly on the Desktop) —")
-        print("  or f5-tts itself. Minutes instead means the model came up.")
+        print("  is running — the fault is inside /speak. Read the time and the")
+        print("  status above: a 500 in under a second never reached the")
+        print("  checkpoint load, which points at the two things that fail before")
+        print("  it — the reference WAV, which the client puts back on the server")
+        print("  itself (POST /ref; the health line above says whether the server")
+        print("  holds this machine's clip) — or f5-myanmar-tts itself.")
+        print("  A 524 is Cloudflare cutting the tunnel at about a hundred")
+        print("  seconds while the server carries on: the model is still")
+        print("  loading, and the next run of this script will find it loaded.")
+        print("  The server's own log has the traceback: py check_colab_log.py")
         return 1
-    print(f"  the checkpoint is loaded now — that first line took "
+    print(f"  the checkpoint is loaded now — that line took "
           f"{time.time() - t0:.0f}s, and the assistant's replies take seconds")
 
     _head("2. THE SETTINGS AND THE REGISTRY")
