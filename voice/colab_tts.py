@@ -206,12 +206,19 @@ def probe(text: str = "ဒေါ်အေးသန့် ပြောနေပ�
   """
   cleaned = _clean_text(text) or text
   t0 = time.time()
+  # Every failure below carries how long it took, on purpose. It is the one
+  # piece of evidence that separates the two halves of a failed /speak: a 500
+  # that arrives in under a second never reached the checkpoint load, so it is
+  # the reference WAV or the f5-tts install, and waiting longer will not help;
+  # one that takes minutes got the model up and failed afterwards, which is a
+  # different fault in a different place.
   try:
     resp = _speak_request(cleaned, timeout)
     if resp.status != 200:
       detail = resp.data[:200].decode("utf-8", "replace")
       resp.release_conn()
-      return False, f"HTTP {resp.status}: {detail!r}"
+      return False, (f"HTTP {resp.status} after {time.time() - t0:.1f}s: "
+                     f"{detail!r}")
     data = resp.data
     resp.release_conn()
     with wave.open(io.BytesIO(data), "rb") as w:
@@ -220,7 +227,7 @@ def probe(text: str = "ဒေါ်အေးသန့် ပြောနေပ�
       channels = w.getnchannels()
       width = w.getsampwidth() * 8
   except Exception as e:  # noqa: BLE001
-    return False, f"{type(e).__name__}: {e}"
+    return False, f"{type(e).__name__} after {time.time() - t0:.1f}s: {e}"
 
   if not frames:
     return False, "answered, but with an empty WAV"

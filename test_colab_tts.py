@@ -117,9 +117,14 @@ def main() -> int:
     if not ok:
         print()
         print("  The health route answered, so the tunnel is up and the notebook")
-        print("  is running — the fault is inside /speak. Cell 4's output has the")
-        print("  traceback; the usual cause is the reference WAV, which has to be")
-        print("  uploaded again in every new session (/content/ref_aye_thant.wav).")
+        print("  is running — the fault is inside /speak. The traceback went into")
+        print("  the Colab server's pipe, where no window shows it. Read the time")
+        print("  above: a 500 back in under a second never reached the checkpoint")
+        print("  load, which points at the two things that fail before it — the")
+        print("  reference WAV, which every new runtime wipes")
+        print("  (/content/ref_aye_thant.wav; upload voice/ref_aye_thant.wav")
+        print("  under that name, it is already named correctly on the Desktop) —")
+        print("  or f5-tts itself. Minutes instead means the model came up.")
         return 1
     print(f"  the checkpoint is loaded now — that first line took "
           f"{time.time() - t0:.0f}s, and the assistant's replies take seconds")
