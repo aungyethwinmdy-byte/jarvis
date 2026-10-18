@@ -95,6 +95,17 @@ _SECTION_SEARCH_PAGES = 20
 # relevance-ranked, so two pages is the useful part of any answer — and unlike
 # the walk it reaches the whole archive in one request per page.
 _SITE_SEARCH_PAGES = 2
+# How many reduced sub-phrases (`moi_index.partials`) a live search may pay
+# for, **one request each**. Measured 2026-10-18: 'ကျောက်မျက်ပြပွဲ' matched
+# nothing because the site writes 'မြန်မာ့ကျောက်မျက်ရတနာပြပွဲ' — the stem
+# 'ကျောက်မျက်' is where the emporium articles live, and the space-token loop
+# below never fires for a query without a space.
+_PARTIAL_TRIES = 4
+# The size of a day-window section listing at which the answer tells the model
+# to search by subject instead of paging — /other-news throws off ~40 cards a
+# day, so even two days there is a wall of unrelated stories behind the first
+# eight, and "is there news about X" cannot be eyeballed out of that.
+_LIST_SEARCH_HINT = 24
 _NOT_FOUND = "ဖော်ပြပါ အကြောင်းအရာအတွက် သတင်းအချက်အလက် ရှာမတွေ့ပါခင်ဗျာ။"
 # The site search reaches the whole archive; what it does NOT carry is a date, so
 # the answer says so rather than leaving a blank where a date would be.
@@ -103,6 +114,14 @@ _SEARCH_SCOPE = ("ℹ️ moi.gov.mm ရဲ့ ကိုယ်ပိုင် ရ
                  "အပြည့်အစုံကို 'story' နဲ့ ကြည့်ပါ။")
 _BOTH_SCOPE = ("ℹ️ moi.gov.mm ရဲ့ ကိုယ်ပိုင် ရှာဖွေမှု + ကဏ္ဍ တစ်ခုလုံး နှစ်ခုလုံးနဲ့ "
                "ရှာထားတာပါ။ ရက်စွဲပါတဲ့ အပိုင်းက ကဏ္ဍမှ ဖတ်ထားတာပါ။")
+# The live answer is complemented by a refresh the caller cannot see: when the
+# search had to fall back to the site (or the index answered from days-old
+# rows) AND the index is days behind, `moi_index.catchup_if_stale()` starts a
+# background crawl and this line records it, so the answer stays honest about
+# which copy it read and what is being done about it.
+_CATCHUP_NOTE = ("ℹ️ သိမ်းထားတဲ့ MOI index က ရက်အတော် ဟောင်းနေလို့ နောက်ကွယ်မှာ "
+                 "အလိုအလျောက် ပြန်ဆွဲနေပါတယ် — နောက်ထပ် မေးခွန်းတွေကို index "
+                 "အသစ်နဲ့ ဖြေပါမယ်။ ဒီအဖြေက live ဆိုက်က ရှာထားတာပါ။")
 
 
 def _date(value: str) -> str:
@@ -374,7 +393,7 @@ def moi_news(parameters: dict = None, player=None, session_memory=None, **_) -> 
                         f"ဝက်ဘ်ဆိုဒ်က ဒီသတင်းအတွက် စာသား မပေးထားပါ။\n"
                         f"ခေါင်းစဉ်နဲ့ လင့်ကိုတော့ ဖွင့်ကြည့်လို့ ရပါတယ်: {mc.BASE}{url}")
             return (f"⚠️ {mc.BASE}{url} ရဲ့ စာသားကို **ဖတ်လို့ မရပါ** — စာမျက်နှာကတော့ "
-                    f"ရှိပါတယ်၊ ကျွန်မ စာသားကို ရှာမတွေ့တာပါ။\n"
+                    f"ရှိပါတယ်၊ ကျွန်တော် စာသားကို ရှာမတွေ့တာပါ။\n"
                     f"ဒါက 'သတင်း မရှိဘူး' လို့ မဆိုလိုပါ။ ခေါင်းစဉ်နဲ့ လင့်ကိုတော့ "
                     f"ဖွင့်ကြည့်လို့ ရပါတယ်: {mc.BASE}{url}")
         # The search result list carries no date, so the article's own date is
@@ -444,6 +463,10 @@ def moi_news(parameters: dict = None, player=None, session_memory=None, **_) -> 
                        + (f" (crawl: {idx_when[:16]})" if idx_when else "")
                        + " — ဒီစာရင်းမှာ ရက်စွဲ ပါပါတယ်။ "
                          "ဒီနေ့အသစ်ဆုံး သတင်း လိုချင်ရင် live မှာ ထပ်စစ်ခိုင်းပါ။")
+            # The index answered, but from a copy that may be days behind the
+            # site the news is still on — start the refresh and say so.
+            if ix.catchup_if_stale():
+                out.append(_CATCHUP_NOTE)
             # Index cards carry MOI headlines AND summaries — the richest
             # external text this tool hands back, so the boundary matters most
             # here. The provenance lines stay inside the wrapper: they are
@@ -469,6 +492,19 @@ def moi_news(parameters: dict = None, player=None, session_memory=None, **_) -> 
                 hits = mc.search_site(tok, pages=1, limit=_DISPLAY_MAX)
                 if hits:
                     term = tok
+                    break
+        # **A compound query is one word and the site may spell the event
+        # with the word inside it.** Measured 2026-10-18: 'ကျောက်မျက်ပြပွဲ'
+        # found nothing either way while the emporium articles are titled
+        # 'မြန်မာ့ကျောက်မျက်ရတနာပြပွဲ'. Syllable-boundary sub-phrases
+        # (`moi_index.partials`) are tried here, longest first, one request
+        # each, and `term` becomes the phrase that finally matched so the
+        # answer says what it actually searched.
+        if not hits:
+            for cand in ix.partials(term, cap=_PARTIAL_TRIES):
+                hits = mc.search_site(cand, pages=1, limit=_DISPLAY_MAX)
+                if hits:
+                    term = cand
                     break
         if not hits:
             hits = mc.search(term, sections=(slug,) if slug else (),
@@ -528,6 +564,11 @@ def moi_news(parameters: dict = None, player=None, session_memory=None, **_) -> 
                f"(moi.gov.mm):", ""]
         for c in hits[:limit]:
             out += [_card(c), ""]
+        # The live search just answered because the index could not — if that
+        # is only because the index is behind the calendar, refresh it in the
+        # background and record that this copy is live.
+        if ix.catchup_if_stale():
+            out.append(_CATCHUP_NOTE)
         if used == "site":
             out.append(_SEARCH_SCOPE)
             if (date or days) and not date_filtered:
@@ -608,6 +649,19 @@ def moi_news(parameters: dict = None, player=None, session_memory=None, **_) -> 
         out += [_card(c), ""]
     if len(cards) > limit:
         out.append(f"  … (ပထမ {to_burmese_digits(limit)} ခု ပြထားတယ်)")
+    if len(cards) > _LIST_SEARCH_HINT:
+        # A section this busy cannot be eyeballed for a subject — the cards
+        # beyond the first `limit` are invisible to the model, and measured
+        # 2026-10-18 that is exactly how "ပြည်တွင်းသတင်းမှာ ကျောက်မျက်သတင်း
+        # ပါလား" was answered 'မတွေ့ပါ' while the section held the emporium
+        # articles. The note tells the model what should have been called.
+        out.append(f"ℹ️ ဒီကဏ္ဍမှာ ဒီအကွာအဝေးအတွင်း သတင်း "
+                   f"{to_burmese_digits(len(cards))} ခု ရှိပါတယ် — ပထမ "
+                   f"{to_burmese_digits(min(limit, len(cards)))} ခုသာ "
+                   "ဖော်ပြထားပါတယ်။ ဘယ်အကြောင်းရာ ('ကျောက်မျက်ပြပွဲ' စသည့် "
+                   "ဘာသာစကားလုံး) အကြောင်းလဲ ဆိုလို့ "
+                   "action='search' + query နဲ့ ရှာပါ — list နဲ့ "
+                   "ရှာလို့ မရပါ။")
     if cards:
         out += ["", f"📅 ရက်စွဲ အကွာအဝေး — {cards[-1]['issue_date']} ကနေ "
                     f"{cards[0]['issue_date']} အထိ"]
@@ -679,6 +733,14 @@ TOOL = {
         "'list' (default) — a section's articles, newest first. "
         "'search' — a **term** across the sections, e.g. a country, a place or a "
         "person's name; use it for 'X အကြောင်း သတင်းရှိလား'. "
+        "**A question whose SUBJECT is named — an event, a company, a person, "
+        "a place ('ပြည်တွင်းသတင်းမှာ ကျောက်မျက်ပြပွဲနဲ့ပတ်သက်တဲ့ သတင်းပါလား') "
+        "MUST be `action='search'` + `query`, `section` optional — never "
+        "`list`. Measured 2026-10-18: the model answered a gem-emporium "
+        "question by listing 'ပြည်တွင်းသတင်း' with `days=7` and no query, the "
+        "tool showed 8 of 169 unrelated cards, and the owner was told there was "
+        "no gem news while the site was publishing the emporium's own articles. "
+        "A list shows only the newest cards — it cannot see a subject. "
         "**`search` reads the local MOI index first** (the same site, crawled — "
         "1–2 s, dated, whole archive) and falls back to the live site search + "
         "section walk only when the index has nothing. The answer always says "
@@ -742,6 +804,11 @@ TOOL = {
                                 "Burmese. Do NOT pass the whole question — the site "
                                 "matches phrases, so 'နိုင်ငံတော်သမ္မတ အိန္ဒိယ ခရီးစဉ်' "
                                 "finds nothing while 'အိန္ဒိယ ခရီးစဉ်' finds the trip. "
+                                "**A single compound is fine** ('ကျောက်မျက်ပြပွဲ') — "
+                                "when the site spells the event with a word inside its "
+                                "name ('မြန်မာ့ကျောက်မျက်ရတနာပြပွဲ') the tool reduces the "
+                                "compound by itself and the answer says which phrase it "
+                                "used. "
                                 "**For an event, pass two words, not one:** measured "
                                 "2026-10-03, 'အိန္ဒိယ ခရီးစဉ်' ranked the trip article "
                                 "first while 'အိန္ဒိယ' alone ranked border-road stories "

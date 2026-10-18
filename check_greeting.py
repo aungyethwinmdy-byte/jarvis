@@ -2,13 +2,13 @@
 
     py check_greeting.py
 
-Four sections:
+Five sections:
 
   STATUS    whether the greeting is switched on at all, and where it comes from
   TIME      the Burmese date/time formatting, including the day-part boundaries
   WEATHER   a live fetch from Open-Meteo, plus the retry/cache/budget offline
-            (the weather is no longer part of the greeting — since 2026-10-18 it
-            is only ever answered by the `weather_report` tool)
+  BUDGET    the greeting's wait against its own weather fetch's worst case —
+            two constants in main.py that nothing else ties together
   BRIEFING  the real _send_startup_briefing(), run against a stub session, so
             the exact text JARVIS will speak is printed
 
@@ -153,6 +153,67 @@ def show_weather_resilience() -> int:
     return sum(1 for ok in (ok_cache, ok_retry, ok_budget) if not ok)
 
 
+def show_greeting_budget() -> int:
+    """The greeting's wait must outlast its own weather fetch's worst case.
+
+    Two numbers in main.py have to agree and nothing in the code makes them:
+
+        _WEATHER_ATTEMPT  passed to fetch_weather_brief()
+        _WEATHER_WAIT     how long asyncio.wait_for waits for the answer
+
+    fetch_weather_brief()'s internal retry takes its second attempt out of what
+    is left of that timeout, floored at _RETRY_MIN_SLICE — so the function costs
+    up to `attempt + _RETRY_MIN_SLICE + _RETRY_DELAY` before it gives up. If the
+    greeting waits only `attempt`, the retry can NEVER land.
+
+    Measured 2026-09-27 the pair was 5.0 / 5.0: the greeting gave up at 5.0s and
+    the executor thread ran on to 8.4s with an answer nobody would read. The
+    console showed it plainly — "Startup weather unavailable" printed BEFORE the
+    retry it was waiting for had even started.
+
+    This does not compare the two constants; it runs the stall and times it, so
+    the check fails on the behaviour rather than on the arithmetic.
+
+    Returns the number of failed checks.
+    """
+    import time
+
+    from actions import weather_report as w
+
+    print()
+    print("GREETING BUDGET (offline)")
+    print("-" * 72)
+
+    try:
+        from main import _WEATHER_ATTEMPT, _WEATHER_WAIT
+    except Exception as e:
+        print(f"  budget     : cannot read the constants from main.py "
+              f"({type(e).__name__}: {e})  FAIL")
+        return 1
+
+    t0 = time.time()
+    try:
+        w._get_json("http://192.0.2.1/", timeout=_WEATHER_ATTEMPT)  # unroutable
+        elapsed, stalled = time.time() - t0, False
+    except Exception:
+        elapsed, stalled = time.time() - t0, True
+
+    margin = _WEATHER_WAIT - elapsed
+    ok = stalled and margin > 0
+    print(f"  budget     : greeting's own fetch, {_WEATHER_ATTEMPT}s timeout, "
+          f"full stall -> gave up after {elapsed:.2f}s; greeting waits "
+          f"{_WEATHER_WAIT}s -> {margin:+.2f}s margin  {'OK' if ok else 'FAIL'}")
+
+    floor = _WEATHER_ATTEMPT + w._RETRY_MIN_SLICE + w._RETRY_DELAY
+    print(f"               worst case = _WEATHER_ATTEMPT + _RETRY_MIN_SLICE "
+          f"({w._RETRY_MIN_SLICE}) + _RETRY_DELAY ({w._RETRY_DELAY}) = "
+          f"{floor:.1f}s; the wait must exceed it or the retry never lands")
+    if not ok:
+        print("               *** on a stall the greeting drops the weather "
+              "and the retry's answer is discarded ***")
+    return 0 if ok else 1
+
+
 class _FakeSession:
     def __init__(self):
         self.sent = []
@@ -218,14 +279,15 @@ def show_briefing() -> int:
         ("offers help with ဗျာ, and never says ရှင်",
          ("ကူညီပေးရမလဲဗျာ" in body) and ("ရှင်" not in body)),
         ("says it is ready",     "အသင့်ရှိနေပါပြီ" in body),
-        # The owner's ask of 2026-10-18 named a four-sentence greeting. These
-        # four checks are what stops it growing back: each one was a sentence
-        # that used to be in here.
-        ("four sentences, as asked",          greeting.count("။") == 4),
-        ("the date is not read out",          "ရက်နေ့" not in greeting),
-        ("the clock is not read out",         "မြန်မာစံတော်ချိန်" not in greeting),
-        ("the weather is not read out",       "ရာသီဥတု" not in greeting),
-        ("the last session is not recalled",  "ထို့အပြင်" not in greeting),
+        ("speaks as ကျွန်တော်, never ကျွန်မ",
+         ("ကျွန်တော်" in greeting) and ("ကျွန်မ" not in greeting)),
+        ("gives the date",       "ရက်နေ့" in greeting),
+        ("gives the weather",    "ရာသီဥတု" in greeting),
+        # The owner asked for the date and the weather back on 2026-10-18, and
+        # did NOT ask for these two. They are checked, not merely left out, so
+        # that re-adding one of them is a decision rather than a drift.
+        ("the clock is NOT read out",        "မြန်မာစံတော်ချိန်" not in greeting),
+        ("the last session is NOT recalled",  "ထို့အပြင်" not in greeting),
         ("read-verbatim order",  "မပြောင်းပါနှင့်" in body),
         ("no tool call",         "Tool မခေါ်ပါနှင့်" in body),
         ("no ascii digits",      not re.search(r"[0-9]", body)),
@@ -242,6 +304,7 @@ if __name__ == "__main__":
     show_status()
     show_time()
     failed  = show_weather()
+    failed += show_greeting_budget()
     failed += show_briefing()
     print()
     print("RESULT:", "ALL OK" if not failed else f"{failed} CHECK(S) FAILED")
