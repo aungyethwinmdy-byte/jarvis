@@ -22,6 +22,7 @@ requests>=2.31,<3
 beautifulsoup4>=4.12,<5
 playwright>=1.40,<2
 curl_cffi>=0.7,<1       # web_scraper 3rd fetch rung: Chrome TLS fingerprint + DoH
+urllib3>=2.0,<3         # voice/colab_tts.py talks to the Colab tunnel with it (requests hangs there)
 
 # ── Automation / input control ────────────────────────────────────────────────
 pyautogui

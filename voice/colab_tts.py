@@ -1,5 +1,27 @@
 """Colab F5-Myanmar-TTS Client for JARVIS (Optimized).
 
+WHY THIS TALKS TO THE SERVER WITH urllib3 AND NOT requests  (measured 2026-10-18)
+    Six attempts each, against a host that never changes state:
+
+        requests.get("https://www.cloudflare.com/")     0/6 answered
+        urllib3.PoolManager(...).request("GET", ...)    6/6, median 1.5s
+        curl.exe GET the same URL                       8/8, median 2.0s
+
+    It is reproducible to the attempt and specific to Cloudflare-fronted hosts.
+    The same six attempts against a Google-hosted endpoint answer requests
+    normally, and the old tunnel answered curl while it hung requests. Both
+    libraries sit on the same OpenSSL build and the same sockets — requests is
+    urllib3 underneath — so the difference is something requests adds around
+    urllib3 that could not be pinned down from outside. It does not matter for
+    the decision: a voice that cannot complete a request is not a voice, and one
+    transport was measured answering. `curl.exe` answers too, but shelling out
+    per spoken line to move a WAV in and out of a temp file is a worse trade than
+    two lines of urllib3.
+
+    The timeout is per request rather than the pool default, and retries are off:
+    with urllib3's default Retry, a stalled /speak would be attempted four times,
+    turning a 120s ceiling into eight minutes of silence before the fallback.
+
 THE TUNNEL DIES — THAT IS THE NORMAL CASE, NOT A FAULT
     This voice is served by a Colab notebook behind a Cloudflare *quick* tunnel,
     and a quick tunnel belongs to one Colab session. Close the notebook, lose the
@@ -49,12 +71,16 @@ THE CONTRACT THE NOTEBOOK HAS TO KEEP
 from __future__ import annotations
 
 import io
+import json
 import re
+import ssl
 import time
 import wave
-import requests
 
-COLAB_URL = "https://hospital-pee-candidate-sectors.trycloudflare.com"
+import urllib3
+from urllib3.util import Retry, Timeout
+
+COLAB_URL = "https://disabled-neutral-weblog-graham.trycloudflare.com"
 
 # One warm line. F5 renders a sentence in a few seconds once the checkpoint is in
 # memory; this is the ceiling that turns a stuck server into the fallback voice.
@@ -67,6 +93,17 @@ HEALTH_TIMEOUT = 10
 
 # The first `POST /speak` of a Colab session downloads and loads the checkpoint.
 COLD_TIMEOUT = 600
+
+CONNECT_TIMEOUT = 10
+
+# ssl.create_default_context() is named explicitly. It is python's own context,
+# with the system trust store, and it is the configuration that was measured
+# answering (see the module docstring).
+_POOL = urllib3.PoolManager(
+    ssl_context=ssl.create_default_context(),
+    retries=Retry(0),
+    timeout=Timeout(connect=CONNECT_TIMEOUT, read=HEALTH_TIMEOUT),
+)
 
 
 def _clean_text(text: str) -> str:
@@ -81,6 +118,18 @@ def _clean_text(text: str) -> str:
   return text
 
 
+def _speak_request(text: str, read_timeout: int):
+  """One POST /speak. Raises whatever urllib3 raises; the callers catch it."""
+  body = json.dumps({"text": text}).encode("utf-8")
+  return _POOL.request(
+    "POST", COLAB_URL.rstrip("/") + "/speak",
+    body=body,
+    headers={"Content-Type": "application/json"},
+    timeout=Timeout(connect=CONNECT_TIMEOUT, read=read_timeout),
+    retries=False,
+  )
+
+
 def health(timeout: int = HEALTH_TIMEOUT) -> tuple[bool, str]:
   """Ask `GET /` whether anything is behind this URL. Returns (ok, detail).
 
@@ -91,10 +140,15 @@ def health(timeout: int = HEALTH_TIMEOUT) -> tuple[bool, str]:
   """
   t0 = time.time()
   try:
-    resp = requests.get(COLAB_URL.rstrip("/") + "/", timeout=timeout)
-    resp.raise_for_status()
-    body = " ".join(resp.text.split())[:60]
-    return True, f"{resp.status_code} {body} ({time.time() - t0:.1f}s)"
+    resp = _POOL.request(
+      "GET", COLAB_URL.rstrip("/") + "/",
+      timeout=Timeout(connect=CONNECT_TIMEOUT, read=timeout),
+      retries=False,
+    )
+    body = " ".join(resp.data.decode("utf-8", "replace").split())[:60]
+    ok = resp.status == 200
+    resp.release_conn()
+    return ok, f"{resp.status} {body} ({time.time() - t0:.1f}s)"
   except Exception as e:  # noqa: BLE001
     return False, f"{type(e).__name__}: {e}"
 
@@ -116,12 +170,17 @@ def synthesize_pcm(text: str) -> bytes | None:
     return None
 
   try:
-    url = f"{COLAB_URL.rstrip('/')}/speak"
-    resp = requests.post(url, json={"text": cleaned}, timeout=COLAB_TIMEOUT)
-    resp.raise_for_status()
+    resp = _speak_request(cleaned, COLAB_TIMEOUT)
+    if resp.status != 200:
+      print(f"[ColabTTS] HTTP {resp.status} from /speak: "
+            f"{resp.data[:200].decode('utf-8', 'replace')!r}")
+      resp.release_conn()
+      return None
 
     # WAV မှ raw 16-bit mono 24kHz PCM ကို ထုတ်ယူခြင်း
-    with wave.open(io.BytesIO(resp.content), "rb") as w:
+    data = resp.data
+    resp.release_conn()
+    with wave.open(io.BytesIO(data), "rb") as w:
       return w.readframes(w.getnframes())
   except Exception as e:
     print(f"[ColabTTS] {type(e).__name__}: {e}")
@@ -148,10 +207,14 @@ def probe(text: str = "ဒေါ်အေးသန့် ပြောနေပ�
   cleaned = _clean_text(text) or text
   t0 = time.time()
   try:
-    resp = requests.post(f"{COLAB_URL.rstrip('/')}/speak",
-                         json={"text": cleaned}, timeout=timeout)
-    resp.raise_for_status()
-    with wave.open(io.BytesIO(resp.content), "rb") as w:
+    resp = _speak_request(cleaned, timeout)
+    if resp.status != 200:
+      detail = resp.data[:200].decode("utf-8", "replace")
+      resp.release_conn()
+      return False, f"HTTP {resp.status}: {detail!r}"
+    data = resp.data
+    resp.release_conn()
+    with wave.open(io.BytesIO(data), "rb") as w:
       frames = w.getnframes()
       rate = w.getframerate()
       channels = w.getnchannels()
