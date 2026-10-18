@@ -61,21 +61,30 @@ THE FIRST CALL IS SLOW, AND THAT LOOKS LIKE A DEAD TUNNEL
     voice.
 
 THE CONTRACT THE NOTEBOOK HAS TO KEEP
-    One route: `POST {COLAB_URL}/speak` with `{"text": "…"}`, answering a WAV of
-    16-bit mono 24 kHz PCM, plus `GET /` for the health answer above. The rate is
-    not cosmetic — main.py's player runs at RECEIVE_SAMPLE_RATE (24 kHz) and the
-    WAV header is discarded here, so a server answering 22.05 kHz would play back
+    `POST {COLAB_URL}/speak` with `{"text": "…"}`, answering a WAV of 16-bit mono
+    24 kHz PCM, plus `GET /` for the health answer above. The rate is not
+    cosmetic — main.py's player runs at RECEIVE_SAMPLE_RATE (24 kHz) and the WAV
+    header is discarded here, so a server answering 22.05 kHz would play back
     flat, sounding like a bad clone rather than like a wrong setting. `probe()`
     reports the rate it got.
+
+    A v2 notebook also serves `GET/POST /ref` (the reference clip) and
+    `POST /reftext`, which is how this client keeps the pair in place on a
+    runtime that has just been wiped, and `GET /log`, which is how a traceback
+    inside the server can be read at all. Older notebooks serve only the first
+    two routes, and everything here still works against them: those three are
+    used when they are there.
 """
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import re
 import ssl
 import time
 import wave
+from pathlib import Path
 
 import urllib3
 from urllib3.util import Retry, Timeout
@@ -95,6 +104,20 @@ HEALTH_TIMEOUT = 10
 COLD_TIMEOUT = 600
 
 CONNECT_TIMEOUT = 10
+
+# The reference clip and its transcript, as they live on this machine — not in
+# Colab. A Colab runtime wipes /content, and the notebook's server cannot reach
+# back here to fetch anything, so the client is what keeps the pair in place:
+# after every health answer it compares the clip the server is holding with this
+# one and sends both if they differ.
+#
+# They are a pair, and that is the whole point of the sha1. F5 clones a voice by
+# reading the transcript of the reference clip and lining the recording up with
+# those words; the transcript of a *different* recording still produces fluent
+# Burmese, in the wrong rhythm, saying words nobody said — measured on this
+# setup, and nothing in the response says anything is wrong.
+REF_WAV = Path(__file__).with_name("ref_aye_thant.wav")
+REF_TXT = Path(__file__).with_name("ref_aye_thant.txt")
 
 # ssl.create_default_context() is named explicitly. It is python's own context,
 # with the system trust store, and it is the configuration that was measured
@@ -130,27 +153,111 @@ def _speak_request(text: str, read_timeout: int):
   )
 
 
-def health(timeout: int = HEALTH_TIMEOUT) -> tuple[bool, str]:
-  """Ask `GET /` whether anything is behind this URL. Returns (ok, detail).
+def server_info(timeout: int = HEALTH_TIMEOUT) -> tuple[bool, dict]:
+  """`GET /` — what the server says about itself. Returns (ok, dict).
 
-  The notebook's health route is served without loading the model, so this
-  answers in milliseconds even while the GPU is still fetching the checkpoint —
-  which is exactly what makes it usable as the cheap question that
-  `synthesize_pcm()` asks before spending minutes on the expensive one.
+  The notebook answers this without touching the model, so it is the cheap
+  question; the dict is also where the server reports whether it is holding a
+  reference clip and which one, which is how the client knows whether to send
+  its own before asking for something to be spoken.
+
+  A notebook older than v2 answers `{"status": "ok", "service": ...}` and nothing
+  else, and that has to keep working — the keys are looked up, never assumed.
   """
-  t0 = time.time()
   try:
     resp = _POOL.request(
       "GET", COLAB_URL.rstrip("/") + "/",
       timeout=Timeout(connect=CONNECT_TIMEOUT, read=timeout),
       retries=False,
     )
-    body = " ".join(resp.data.decode("utf-8", "replace").split())[:60]
-    ok = resp.status == 200
+    body = resp.data.decode("utf-8", "replace")
+    status = resp.status
     resp.release_conn()
-    return ok, f"{resp.status} {body} ({time.time() - t0:.1f}s)"
+    if status != 200:
+      return False, {"error": f"HTTP {status}: {body[:80]}"}
+    try:
+      return True, json.loads(body)
+    except ValueError:
+      return True, {"raw": body[:80]}
   except Exception as e:  # noqa: BLE001
-    return False, f"{type(e).__name__}: {e}"
+    return False, {"error": f"{type(e).__name__}: {e}"}
+
+
+def health(timeout: int = HEALTH_TIMEOUT) -> tuple[bool, str]:
+  """Ask `GET /` whether anything is behind this URL. Returns (ok, detail).
+
+  The same question as `server_info()`, with the answer left as one line for a
+  console or a check script.
+  """
+  t0 = time.time()
+  ok, info = server_info(timeout)
+  if not ok:
+    return False, str(info.get("error", "no answer"))
+  ref = info.get("ref")
+  refpart = "" if ref is None else f" ref={'yes' if ref else 'NO'}"
+  return True, (f"200 {json.dumps(info, ensure_ascii=False)[:70]} "
+                f"({time.time() - t0:.1f}s{refpart})")
+
+
+def local_reference() -> tuple[bytes, str] | tuple[None, None]:
+  """This machine's reference clip and its transcript, or (None, None).
+
+  Both or neither: half a pair is not a slower voice, it is a wrong one.
+  """
+  try:
+    wav = REF_WAV.read_bytes()
+    text = REF_TXT.read_text(encoding="utf-8").strip()
+  except (OSError, UnicodeDecodeError):
+    return None, None
+  return (wav, text) if text else (None, None)
+
+
+def _post(path: str, body: bytes, content_type: str, read_timeout: int = 60):
+  """One POST with a raw body. Raises what urllib3 raises; callers catch it."""
+  return _POOL.request(
+    "POST", COLAB_URL.rstrip("/") + path,
+    body=body,
+    headers={"Content-Type": content_type},
+    timeout=Timeout(connect=CONNECT_TIMEOUT, read=read_timeout),
+    retries=False,
+  )
+
+
+def ensure_reference(info: dict) -> str:
+  """Put this machine's reference pair on the server. Returns one line for a log.
+
+  Never raises, and never decides whether the voice works: on a server with no
+  `/ref` route the line says so and the request goes ahead with whatever
+  reference the server holds, which is the behaviour before this existed.
+  """
+  if "ref_sha1" not in info:
+    return "server has no /ref route (notebook older than v2)"
+
+  wav, text = local_reference()
+  if wav is None:
+    return (f"no {REF_WAV.name} + {REF_TXT.name} on this machine — the server's "
+            f"own reference will be used (ref={info.get('ref')})")
+
+  want = hashlib.sha1(wav).hexdigest()[:12]
+  if info.get("ref_sha1") == want and info.get("ref_text") == text:
+    return "the server already has this machine's reference"
+
+  try:
+    r = _post("/ref", wav, "application/octet-stream")
+    audio_ok = r.status == 200
+    r.release_conn()
+    r = _post("/reftext", json.dumps({"text": text}).encode("utf-8"),
+              "application/json")
+    text_ok = r.status == 200
+    r.release_conn()
+  except Exception as e:  # noqa: BLE001
+    return (f"could not send the reference ({type(e).__name__}: {e}) — the "
+            f"server's own reference will be used")
+
+  if audio_ok and text_ok:
+    return (f"reference sent: {REF_WAV.name} ({len(wav)} bytes) + "
+            f"{len(text)} characters of transcript")
+  return f"the server refused the reference (audio={audio_ok}, text={text_ok})"
 
 
 def synthesize_pcm(text: str) -> bytes | None:
@@ -162,12 +269,16 @@ def synthesize_pcm(text: str) -> bytes | None:
   # full COLAB_TIMEOUT of silence before the reply falls back to a prebuilt
   # voice; with it, the fallback lands in about HEALTH_TIMEOUT. A live server
   # answers this instantly whatever the GPU is doing, so nothing is lost.
-  alive, why = health()
+  alive, info = server_info()
   if not alive:
-    print(f"[ColabTTS] no answer from {COLAB_URL} — {why}")
+    print(f"[ColabTTS] no answer from {COLAB_URL} — {info.get('error')}")
     print("[ColabTTS] the Colab session has probably stopped; start the "
           "notebook and paste the new tunnel URL into voice/colab_tts.py")
     return None
+
+  note = ensure_reference(info)
+  if not note.startswith(("the server already", "server has no /ref")):
+    print(f"[ColabTTS] {note}")
 
   try:
     resp = _speak_request(cleaned, COLAB_TIMEOUT)
@@ -206,10 +317,24 @@ def probe(text: str = "ဒေါ်အေးသန့် ပြောနေပ�
   """
   cleaned = _clean_text(text) or text
   t0 = time.time()
+
+  # The same preflight a real reply runs, and for the same reason it exists: a
+  # probe that let the server fall back to the model's own reference would come
+  # back with perfectly good Burmese in the wrong voice and pass. The reference
+  # is what makes it her.
+  alive, info = server_info()
+  if not alive:
+    return False, f"no answer from GET / — {info.get('error')}"
+  note = ensure_reference(info)
+  if not note.startswith(("the server already", "server has no /ref")):
+    print(f"[ColabTTS] {note}")
+  alive, info = server_info()
+  ref_sha = info.get("ref_sha1", "") if alive else ""
+
   # Every failure below carries how long it took, on purpose. It is the one
   # piece of evidence that separates the two halves of a failed /speak: a 500
   # that arrives in under a second never reached the checkpoint load, so it is
-  # the reference WAV or the f5-tts install, and waiting longer will not help;
+  # the reference WAV or the model install, and waiting longer will not help;
   # one that takes minutes got the model up and failed afterwards, which is a
   # different fault in a different place.
   try:
@@ -231,9 +356,22 @@ def probe(text: str = "ဒေါ်အေးသန့် ပြောနေပ�
 
   if not frames:
     return False, "answered, but with an empty WAV"
+
+  # Which reference the server actually read, said out loud. "It returned audio"
+  # is true of a clone and of the model's own sample voice alike.
+  wav_local, _ = local_reference()
+  mine = hashlib.sha1(wav_local).hexdigest()[:12] if wav_local else ""
+  if not ref_sha:
+    refpart = "reference: none on the server"
+  elif mine and ref_sha == mine:
+    refpart = f"reference: {ref_sha} (this machine's clip)"
+  else:
+    refpart = (f"reference: {ref_sha} — NOT this machine's clip "
+               f"({mine or 'none here'})")
+
   seconds = frames / max(rate, 1)
   return True, (f"{seconds:.1f}s of audio — {rate} Hz, {channels} ch, {width}-bit, "
-                f"returned in {time.time() - t0:.1f}s")
+                f"returned in {time.time() - t0:.1f}s, {refpart}")
 
 
 def describe() -> str:
