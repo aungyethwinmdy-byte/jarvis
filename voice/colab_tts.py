@@ -260,6 +260,27 @@ def ensure_reference(info: dict) -> str:
   return f"the server refused the reference (audio={audio_ok}, text={text_ok})"
 
 
+_cpu_warned = False
+
+
+def _warn_if_cpu(info: dict) -> None:
+  """Say the one server property that makes the cloned voice unusable.
+
+  Measured 2026-10-18 on a CPU-only Colab runtime: 741.7 seconds to say 24
+  characters, against a tunnel that cuts a request at about a hundred — so on
+  CPU every reply spends the full timeout and then falls back to the prebuilt
+  voice. Nothing else about the server says this; the health route carries the
+  device, so it is said once, here.
+  """
+  global _cpu_warned
+  if _cpu_warned or not str(info.get("device", "")).startswith("cpu"):
+    return
+  _cpu_warned = True
+  print("[ColabTTS] the Colab model is on CPU — a line takes minutes and the "
+        "tunnel cuts at ~100s, so replies will fall back to the prebuilt voice. "
+        "The notebook needs Runtime → Change runtime type → T4 GPU")
+
+
 def synthesize_pcm(text: str) -> bytes | None:
   cleaned = _clean_text(text)
   if not cleaned:
@@ -279,6 +300,8 @@ def synthesize_pcm(text: str) -> bytes | None:
   note = ensure_reference(info)
   if not note.startswith(("the server already", "server has no /ref")):
     print(f"[ColabTTS] {note}")
+
+  _warn_if_cpu(info)
 
   try:
     resp = _speak_request(cleaned, COLAB_TIMEOUT)
@@ -375,9 +398,11 @@ def probe(text: str = "ဒေါ်အေးသန့် ပြောနေပ�
     refpart = (f"reference: {ref_sha} — NOT this machine's clip "
                f"({mine or 'none here'})")
 
+  dev = str(info.get("device", ""))
+  devpart = f", device {dev}" if dev else ""
   seconds = frames / max(rate, 1)
   return True, (f"{seconds:.1f}s of audio — {rate} Hz, {channels} ch, {width}-bit, "
-                f"returned in {time.time() - t0:.1f}s, {refpart}")
+                f"returned in {time.time() - t0:.1f}s, {refpart}{devpart}")
 
 
 def describe() -> str:

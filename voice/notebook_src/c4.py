@@ -20,8 +20,8 @@ CORS(app)
 
 REF_WAV       = """__REF_WAV__"""
 REF_TEXT_FILE = """__REF_TEXT_FILE__"""
-OUT_WAV       = "/content/_speak_out.wav"
-LOG_PATH      = "/content/server.log"
+OUT_WAV       = """__OUT_WAV__"""
+LOG_PATH      = """__LOG_PATH__"""
 EXPOSE_LOG    = __EXPOSE_LOG__
 
 
@@ -35,6 +35,29 @@ def get_tts():
         from f5_myanmar_tts import MyanmarTTS
         _tts = MyanmarTTS()
     return _tts
+
+
+_device_cache = {}
+
+
+def _device():
+    """Which device the model will speak on: seconds a line, or minutes a line.
+
+    Measured 2026-10-18 on a CPU-only runtime: 741.7 seconds for 24 characters,
+    against a cloudflare tunnel that cuts requests at about a hundred. The
+    difference is not a matter of degree, it is usable against unusable, so the
+    health route says it rather than leaving it to be inferred from timings.
+    """
+    if _tts is not None:
+        return str(getattr(_tts, "device", "?"))
+    if "value" not in _device_cache:
+        try:
+            import torch
+            _device_cache["value"] = ("cuda: " + torch.cuda.get_device_name(0)
+                                      if torch.cuda.is_available() else "cpu")
+        except Exception as e:  # noqa: BLE001
+            _device_cache["value"] = f"unknown ({type(e).__name__})"
+    return _device_cache["value"]
 
 
 def _ref_text():
@@ -85,7 +108,7 @@ def speak():
         used = "model's own reference"
 
     print(f"[speak] {len(text)} chars -> {os.path.getsize(OUT_WAV)} bytes "
-          f"in {time.time() - t0:.1f}s ({used})", flush=True)
+          f"in {time.time() - t0:.1f}s ({used}, {_device()})", flush=True)
     return send_file(OUT_WAV, mimetype="audio/wav")
 
 
@@ -147,14 +170,15 @@ def warm():
     t0 = time.time()
     get_tts()
     elapsed = time.time() - t0
-    print(f"[warm] model ready in {elapsed:.1f}s", flush=True)
-    return {"status": "ok", "seconds": round(elapsed, 1)}
+    print(f"[warm] model ready in {elapsed:.1f}s on {_device()}", flush=True)
+    return {"status": "ok", "seconds": round(elapsed, 1), "device": _device()}
 
 
 @app.route("/", methods=["GET"])
 def health():
     return dict(status="ok", service="f5-myanmar-tts",
-                model="f5-myanmar-tts v2 (Burmese, 24 kHz)", **_ref_state())
+                model="f5-myanmar-tts v2 (Burmese, 24 kHz)",
+                device=_device(), **_ref_state())
 
 
 if __name__ == "__main__":
@@ -164,6 +188,8 @@ if __name__ == "__main__":
 code = (SERVER_CODE
         .replace("__REF_WAV__", REF_WAV_PATH)
         .replace("__REF_TEXT_FILE__", REF_TEXT_FILE)
+        .replace("__OUT_WAV__", "/content/_speak_out.wav")
+        .replace("__LOG_PATH__", "/content/server.log")
         .replace("__EXPOSE_LOG__", "True" if EXPOSE_LOG else "False"))
 with open("/content/tts_server.py", "w", encoding="utf-8") as f:
     f.write(code)

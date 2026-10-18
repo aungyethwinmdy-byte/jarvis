@@ -77,6 +77,8 @@ def check_server_compiles() -> None:
     body = (m.group(1)
             .replace("__REF_WAV__", "/content/ref_aye_thant.wav")
             .replace("__REF_TEXT_FILE__", "/content/ref_text.txt")
+            .replace("__OUT_WAV__", "/content/_speak_out.wav")
+            .replace("__LOG_PATH__", "/content/server.log")
             .replace("__EXPOSE_LOG__", "True"))
     compile(body, "tts_server.py", "exec")
     print(f"embedded server code compiles ({len(body)} chars)")

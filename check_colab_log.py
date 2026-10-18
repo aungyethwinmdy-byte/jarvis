@@ -66,6 +66,17 @@ def main() -> int:
   else:
     print(f"  [OK]  model: {info['model']}")
 
+  dev = str(info.get("device", ""))
+  if dev.startswith("cpu"):
+    print("  [!!]  the model is on CPU — measured 741.7s for 24 characters, "
+          "against a tunnel that cuts at ~100s. Nothing will come back through "
+          "it. Runtime → Change runtime type → T4 GPU, then Run all.")
+  elif dev:
+    print(f"  [OK]  device: {dev}")
+  else:
+    print("  [--]  the server does not report a device (notebook older than "
+          "this check)")
+
   print()
   print(f"  --- /content/server.log, last {args.lines} lines ---")
   try:

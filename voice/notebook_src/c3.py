@@ -22,4 +22,24 @@ def show_state():
         print("                  → မရှိသေးရင် model ရဲ့ ကိုယ်ပိုင် အသံနဲ့ မြန်မာလို ဖတ်ပါမယ်")
 
 
+def show_gpu():
+    """Which device the model speaks on: seconds a line, or minutes a line.
+
+    Measured 2026-10-18: on CPU this model took 741.7 seconds to say 24
+    characters, against a Cloudflare tunnel that cuts a request at about a
+    hundred — so on CPU nothing comes back through it at all.
+    """
+    try:
+        import torch
+        if torch.cuda.is_available():
+            print(f"GPU             : ✅ {torch.cuda.get_device_name(0)}")
+        else:
+            print("GPU             : ❌ မရှိပါ — CPU နဲ့ run နေပါတယ်!")
+            print("                  → Runtime → Change runtime type → T4 GPU လုပ်ပြီး")
+            print("                    Run all ပြန်လုပ်ပါ (CPU ဆိုရင် တစ်ကြောင်း ၁၂ မိနစ်အထိ ကြာတယ်)")
+    except Exception as e:  # noqa: BLE001
+        print(f"GPU             : ? စစ်လို့ မရပါ ({type(e).__name__})")
+
+
+show_gpu()
 show_state()
