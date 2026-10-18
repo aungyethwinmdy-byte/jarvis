@@ -56,7 +56,7 @@ from google.genai import types
 from ui import JarvisUI
 from memory.memory_manager import (
     load_memory, update_memory, format_memory_for_prompt, MEMORY_SOURCES,
-    save_session_summary, pop_last_session,
+    save_session_summary,
     search_memory, set_trim_notifier,
 )
 
@@ -66,7 +66,6 @@ from actions.proactive         import ProactiveEngine
 from actions.background_monitor import (
     add_monitor, remove_monitor, list_monitors, check_all as monitor_check_all,
 )
-from actions.weather_report    import fetch_weather, fetch_weather_brief
 from actions.maps_navigator    import maps_navigator
 from memory.config_manager     import (
     get_brief_enabled, get_media_resolution, get_proactive_audio_enabled,
@@ -127,31 +126,11 @@ _VIS_HOP = 480
 _FIRST_SOUND = CHUNK_SIZE / RECEIVE_SAMPLE_RATE
 _CURSOR_SLACK = 0.15
 
-# ── The greeting's weather budget — two numbers that must agree ───────────────
-# _get_json() spends its FIRST attempt on the whole timeout and gives the retry
-# whatever is left, floored at _RETRY_MIN_SLICE (3.0s). So fetch_weather_brief()
-# costs up to `timeout + 3.4s` before it gives up. Waiting only `timeout` on the
-# outside therefore ALWAYS abandons the retry — the one case the retry exists
-# for. Measured 2026-09-27, the console showed exactly that:
-#     [JARVIS] Startup weather unavailable: TimeoutError()
-#     [JARVIS] Briefing phase 1 (greeting) sent.
-#     [Weather] ⚠️ TimeoutError — retrying once     <- orphaned thread
-# The greeting went out with no weather, and the retry's answer was thrown away
-# because the awaiting task had already given up. The executor thread is not
-# cancellable, so it also ran to completion for nothing.
-#
-# _WEATHER_ATTEMPT = 3.5 keeps the healthy path untouched: Open-Meteo answers in
-# 1.6-3.3s, so the first attempt still lands on its own. Measured on a full
-# stall (192.0.2.1, unroutable), 3.5s inner gives up after **7.0s**, so the wait
-# is 7.5. The old pair (5.0 wait against an 8.4s worst case) never had a chance.
-# The price is 2.5s of extra worst-case silence, paid only when the network is
-# already failing.
-#
-# check_greeting.py measures this pair rather than trusting it — change either
-# number and that check fails instead of the greeting silently losing the
-# weather.
-_WEATHER_ATTEMPT = 3.5
-_WEATHER_WAIT    = 7.5
+# The assistant's name as the VOICE should say it. The Live voice reads Latin
+# letters as letters of the alphabet, so "JARVIS" is spelled out rather than
+# spoken as a name; the Burmese writing of it is what the owner asked to hear
+# (2026-10-18). A name that is not in this table is used exactly as it is set.
+_SPOKEN_NAMES = {"JARVIS": "ဂျာဗစ်"}
 
 
 def _pcm_visemes(samples, sr: int = 24000):
@@ -2093,71 +2072,43 @@ class JarvisLive:
             return (e.get("value", "") if isinstance(e, dict) else str(e)).strip()
 
         name = _val("name") or "ဆရာ"
+        spoken_name = _SPOKEN_NAMES.get(self._asst_name.upper(), self._asst_name)
 
-        loop = asyncio.get_event_loop()
-        # Only the weather is started here. The news used to be kicked off at
-        # the same moment and read out as a second phase of the greeting; it is
-        # now the daily_briefing tool, answered when asked. Starting it anyway
-        # would be a wasted network round trip on every single launch.
-        # The two budget constants live at module level so check_greeting.py can
-        # assert their relationship by measurement — see _WEATHER_ATTEMPT.
-        weather_future = loop.run_in_executor(
-            None, fetch_weather_brief, "နေပြည်တော်", _WEATHER_ATTEMPT)
-
+        # Nothing is fetched for the greeting any more. The news used to be
+        # kicked off at this moment and read out as a second phase of it (now
+        # the daily_briefing tool, answered when asked), and the weather was
+        # fetched in parallel so the greeting could name it. Both were dropped
+        # at the owner's request on 2026-10-18: `weather_report` and
+        # `get_current_time` answer all of it the moment it is asked for, which
+        # is where a forecast belongs. Nothing was lost but the wait.
         await asyncio.sleep(0.3)
         if not self.session:
             return
 
-        try:
-            last = await asyncio.to_thread(pop_last_session)
-        except Exception as e:
-            # Not worth losing the greeting over: recalling the last
-            # conversation is a nicety, the greeting is the point.
-            print(f"[Briefing] last-session lookup failed: {e!r}")
-            last = None
-        session_clause = ""
-        if last:
-            try:
-                _delta_str = timefmt.to_burmese_digits(_delta)
-                _when  = "ယနေ့ မနက်ပိုင်းက" if _delta == 0 else ("မနေ့က" if _delta == 1 else f"လွန်ခဲ့သော {_delta_str} ရက်က")
-            except Exception:
-                _when = "ပြီးခဲ့သည့်တစ်ခေါက်က"
-            session_clause = timefmt.to_burmese_digits(
-                f" ထို့အပြင် {_when} ဆွေးနွေးခဲ့သည့် အကြောင်းအရာ ({last['summary']}) ကို မြန်မာလို အကျဉ်းလေး ထည့်ပြောပါ။"
-            )
-
-        # The greeting is assembled here and handed over as finished text, for
-        # the same reason the time is: told to "greet the user and mention the
-        # time and weather", the model paraphrases, and every paraphrase is a
-        # chance to mis-state the hour or invent the forecast. Handed the exact
-        # sentence, it only has to read it.
-        now = timefmt.now_mmt()
+        # The greeting is assembled here and handed over as finished text. Told
+        # to "greet the user and mention the time and weather", the model
+        # paraphrases, and every paraphrase is a chance to address the wrong
+        # person or to say a sentence nobody wrote. Handed the exact words, it
+        # only has to read them — measured 2026-10-18 with probe_greeting_live,
+        # which plays this text through a real session and transcribes the
+        # audio back: the two are character-for-character the same.
+        #
+        # THE OWNER'S ASK, 2026-10-18. The old greeting ran to five sentences —
+        # mingalaba, the date, the clock, the weather, plus a recall of the last
+        # session — and he asked for this one, naming every word of it. Let it
+        # stay short.
         greeting = (
-            f"မင်္ဂလာပါ {name}၊ ကျွန်မ {self._asst_name} ပါ။ "
-            f"ဘယ်လိုဝန်ဆောင်မှုမျိုးကို ဆောင်ရွက်ပေးရမလဲခင်ဗျာ။ "
-            f"ဒီနေ့ကတော့ {timefmt.burmese_month_day(now)}ပါ။ "
-            f"မြန်မာစံတော်ချိန် {timefmt.burmese_clock(now)} ရှိပါပြီ။"
+            f"မင်္ဂလာပါ {name} ကျွန်တော် {spoken_name} ပါ။ "
+            f"ဒီနေ့ {name} ဘာသိချင်လဲ။ "
+            f"ဘာကူညီပေးရမလဲဗျာ။ "
+            f"အသင့်ရှိနေပါပြီ။"
         )
-
-        # Bounded, because this sits between the user pressing start and hearing
-        # anything at all. Naypyidaw is in the pre-resolved table so the usual
-        # case is a single forecast request; on failure the sentence is simply
-        # left out rather than replaced with an apology inside the greeting.
-        weather = ""
-        try:
-            weather = await asyncio.wait_for(
-                asyncio.wrap_future(weather_future), timeout=_WEATHER_WAIT) or ""
-        except Exception as e:
-            print(f"[JARVIS] Startup weather unavailable: {e!r}")
-        if weather:
-            greeting += (f" {name}နေထိုင်တဲ့ နေပြည်တော်ရဲ့ ရာသီဥတုကတော့ "
-                         f"{weather} ဖြစ်နေပါပြီ။")
 
         p1 = (
             "အောက်ပါစာကို သဘာဝကျကျ၊ နွေးထွေးယဉ်ကျေးစွာ အသံထွက်ဖတ်ပါ။ "
             "စကားလုံး တစ်လုံးမှ မပြောင်းပါနှင့်၊ မထပ်ပါနှင့်၊ မဖြည့်ပါနှင့်။ "
             "ရှေ့ဆက် နိဒါန်း ဘာမှ မထည့်ပါနှင့်။\n"
-            f"{greeting}{session_clause}\n"
+            f"{greeting}\n"
             "Tool မခေါ်ပါနှင့်။ မြန်မာဘာသာဖြင့်သာ ပြောပါ။"
         )
 
@@ -2190,8 +2141,10 @@ class JarvisLive:
         # calendar day only, moi.gov.mm sections in priority order, then
         # BBC/Irrawaddy.
         #
-        # The greeting itself is unchanged: mingalaba, the date, the time and
-        # the weather, spoken as soon as JARVIS connects.
+        # The greeting itself was shortened to four sentences on 2026-10-18 at
+        # the owner's request — no date, no clock, no weather, no recall of the
+        # last session. It is spoken as soon as JARVIS connects, and it is the
+        # exact text below `greeting = (`; nothing adds to it afterwards.
 
     async def _save_session_summary(self) -> None:
         log = self._session_log
