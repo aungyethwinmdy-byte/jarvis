@@ -340,6 +340,18 @@ _CONTENT_WORDS  = ("ထဲ", "ပါသလား", "ပါလား", "ပါလ
 # the model is not reading what it got back. See `_execute_tool`.
 _MAX_IDENTICAL_CALLS = 2
 
+# How many tool calls ONE request may make in total. The guard above stops the
+# model repeating itself; this one stops a long chain. Both are needed once
+# crawling is allowed (core/prompt.txt asks for it): the repeat guard closes the
+# infinite loop, this closes the runaway one, and the failure they prevent is
+# the same one measured 2026-09-29 — the user heard nothing at all because the
+# model was still working. Five covers a real chain (search, read the result,
+# one more look-up) and still leaves the answer inside a conversation.
+#
+# The same number appears in core/prompt.txt. If one moves, move both: the
+# prompt tells the model to answer at exactly the point the code tells it to.
+_MAX_TOOL_STEPS = 5
+
 
 def _tool_call_key(name: str, args: dict) -> tuple:
     """A stable identity for one tool call. Arguments are part of it.
@@ -721,6 +733,7 @@ class JarvisLive:
         self._vision_last_time = 0.0
         self._vision_busy      = False
         self._interrupted      = False
+        self._turn_tool_steps  = 0      # tool calls used by the current request
         self._visemes          = VisemeStream()
         self._last_out_logged  = ""
         self._ptt_enabled      = False
@@ -1093,6 +1106,8 @@ class JarvisLive:
 
         # စာရိုက်ခိုင်းစေသည့်အခါ ယခင် interrupt အလံကို ရှင်းလင်းပေးခြင်း
         self._interrupted = False
+        # A typed question is a new request: its tool budget starts fresh.
+        self._open_tool_budget()
 
         asyncio.run_coroutine_threadsafe(
             self.session.send_client_content(
@@ -1101,6 +1116,23 @@ class JarvisLive:
             ),
             self._loop
         )
+
+    def _open_tool_budget(self) -> None:
+        """A new request starts: the tool-step budget for it opens again.
+
+        Called when the user speaks and when the user types. Deliberately NOT
+        called on `turn_complete`: this project's own probe
+        (`probe_moi_live.py`) learned the hard way that `turn_complete` arrives
+        while audio — and often further work — still follows ("do not break on
+        the first turn_complete"), so resetting there would hand the model a
+        fresh budget in the middle of the very chain this bounds.
+
+        Erring toward resetting is safe: a reset that was not needed only makes
+        the budget larger, while a *missed* reset would refuse the next
+        question's first tool call — and that reads as the assistant ignoring
+        the question.
+        """
+        self._turn_tool_steps = 0
 
     def _tail_active(self) -> bool:
         return time.monotonic() < self._tail_until
@@ -1390,6 +1422,35 @@ class JarvisLive:
                     "return the same thing. Stop calling tools and answer the "
                     "user now, out loud, using the result you already have. "
                     "If the result does not contain the answer, say so plainly."
+                )},
+            )
+
+        # ── Per-request step budget ──────────────────────────────────────────
+        #
+        # Multi-step is allowed now: core/prompt.txt asks the model to keep
+        # looking until it can answer, which is what makes a request like
+        # "which fuel is cheapest in Yangon this week" possible — a price
+        # lookup, then a newspaper read, then the comparison. The guard above
+        # closes the *identical* loop; this one closes the long chain, so
+        # opening the rule cannot bring back the 2026-09-29 failure where the
+        # model called tools until the turn died and the user heard nothing.
+        #
+        # The budget is per request, opened in `_open_tool_budget` when the user
+        # speaks or types.
+        self._turn_tool_steps = getattr(self, "_turn_tool_steps", 0) + 1
+        if self._turn_tool_steps > _MAX_TOOL_STEPS:
+            print(f"[JARVIS] 🛑 {_MAX_TOOL_STEPS} tool steps used on this "
+                  f"request — asking for the answer instead")
+            self.ui.write_log(
+                f"SYS: tool ခေါ်မှု {_MAX_TOOL_STEPS} ခု ပြည့်သည် — အဖြေတောင်းလိုက်သည်")
+            return types.FunctionResponse(
+                id=fc.id, name=name,
+                response={"result": (
+                    f"You have now used all {_MAX_TOOL_STEPS} tool calls this "
+                    "request is allowed. Stop calling tools and answer the user "
+                    "now, out loud, with what you already have. If part of the "
+                    "answer is still missing, say plainly which part you could "
+                    "not get — never guess, and never stay silent."
                 )},
             )
 
@@ -1848,6 +1909,9 @@ class JarvisLive:
                                 self._last_user_speech = time.monotonic()
                                 # စကားပြောသံ အသစ်ရောက်လာပါက interrupt အလံကို အလိုအလျောက် ရှင်းလင်းပေးခြင်း
                                 self._interrupted = False
+                                # A spoken question is a new request: its tool
+                                # budget starts fresh.
+                                self._open_tool_budget()
                                 # …and stop a cloned reply that is still playing,
                                 # which the server cannot do for us.
                                 if self._cloned_voice:
