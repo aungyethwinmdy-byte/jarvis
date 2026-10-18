@@ -2,26 +2,31 @@
 
     py check_voice.py
 
-WHY THIS EXISTS SEPARATELY FROM test_fish_tts.py
-    test_fish_tts.py talks to Fish Audio and asks whether the voice can speak
-    the language. This asks the questions that have nothing to do with the
-    network, and they are the ones that fail silently:
+WHY THIS EXISTS SEPARATELY FROM THE ENGINE TESTS
+    test_fish_tts.py and test_colab_tts.py talk to an engine and ask whether the
+    voice can speak the language. This asks the questions that have nothing to
+    do with the network, and they are the ones that fail silently:
 
       * the voice id collapses back to Charon somewhere in the config layer, so
         the assistant is handed a prebuilt voice and never says so;
       * the registry names a reference_id nobody configured;
-      * the API key is missing, which reads as "the feature does not work"
-        rather than as a credentials problem;
+      * an engine's credentials are missing, which reads as "the feature does
+        not work" rather than as a credentials problem;
+      * a Colab tunnel URL has gone stale. Not checked here — that is the one
+        thing that cannot be asked without a request — but the URL in use is
+        printed, so that the first question ("is it pointing where I think?")
+        can be answered by looking;
       * the rate this module delivers audio at drifts away from the rate
         main.py's player runs at — which does not fail, it just makes her sound
         like a different person.
 
     All of those are cheap to check and none of them need a request.
 
-RUN THE OTHER ONE TOO
+RUN THE ENGINE TEST TOO
     Passing here means the plumbing is right. It says nothing about whether the
-    words come out — see the docstring in test_fish_tts.py for why that is a
-    separate question with a separate answer.
+    words come out — see the docstrings in test_fish_tts.py and
+    test_colab_tts.py for why that is a separate question with a separate
+    answer. This prints which one this setup needs.
 """
 import sys
 from pathlib import Path
@@ -75,20 +80,42 @@ def main() -> int:
         print("  Read `disabled_reason` in voice/voices.json for what has to change.")
         return 0
 
-    _head("2. SETTINGS")
-    key = cfg.get_fish_api_key()
-    print(f"  fish_api_key     {'…' + key[-4:] if key else '(not set)'}")
-    print(f"  fish_reference_id {cfg.get_fish_reference_id()}")
-    print(f"  fish_model        {cfg.get_fish_model() or '(default: s2.1-pro)'}")
-    print(f"  fish_latency      {cfg.get_fish_latency()}")
-    passed &= _ok("a Fish Audio API key is configured", bool(key),
-                  "py test_fish_tts.py --key sk-fish-…")
+    # Only the engines actually in use are checked. A Fish Audio key is not a
+    # requirement of a Colab voice, and demanding one would fail a setup that
+    # works — a false alarm costs exactly the trust a missed one does.
+    engines = {str(e.get("engine") or "fish").strip().lower()
+               for e in voices.values() if custom_voice.is_enabled(e)}
 
-    try:
-        from voice import fish_tts
-        print(f"\n  {fish_tts.describe()}")
-    except Exception as e:                                      # noqa: BLE001
-        passed &= _ok("the Fish Audio module imports", False, str(e))
+    _head("2. SETTINGS")
+    print(f"  engines in use   {', '.join(sorted(engines)) or '(none)'}")
+
+    if "fish" in engines:
+        key = cfg.get_fish_api_key()
+        print(f"  fish_api_key     {'…' + key[-4:] if key else '(not set)'}")
+        print(f"  fish_reference_id {cfg.get_fish_reference_id()}")
+        print(f"  fish_model        {cfg.get_fish_model() or '(default: s2.1-pro)'}")
+        print(f"  fish_latency      {cfg.get_fish_latency()}")
+        passed &= _ok("a Fish Audio API key is configured", bool(key),
+                      "py test_fish_tts.py --key sk-fish-…")
+
+        try:
+            from voice import fish_tts
+            print(f"\n  {fish_tts.describe()}")
+        except Exception as e:                                  # noqa: BLE001
+            passed &= _ok("the Fish Audio module imports", False, str(e))
+
+    if "colab" in engines:
+        try:
+            from voice import colab_tts
+            print(f"\n  {colab_tts.describe()}")
+            print("  a Cloudflare quick tunnel is recreated for every Colab "
+                  "session, so a URL")
+            print("  that answers now may be dead by the next restart. Nothing "
+                  "here can tell, and")
+            print("  nothing about a stale URL fails until a reply is spoken — "
+                  "run the engine test.")
+        except Exception as e:                                  # noqa: BLE001
+            passed &= _ok("the Colab TTS module imports", False, str(e))
 
     problem = custom_voice.problem()
     passed &= _ok("the cloned voice is usable", not problem, problem)
@@ -137,7 +164,9 @@ def main() -> int:
     _head("VERDICT")
     if passed:
         print("  the plumbing is right. Whether the words come out is a different")
-        print("  question — run:  py test_fish_tts.py")
+        print("  question — run:  " + ("py test_colab_tts.py"
+                                        if "colab" in engines
+                                        else "py test_fish_tts.py"))
     else:
         print("  something above failed — the cloned voice will not be used, and")
         print("  replies will arrive in the prebuilt voice instead.")

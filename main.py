@@ -942,12 +942,13 @@ class JarvisLive:
         """Decide, once per connection, whether replies come from the Live API
         or from the cloned voice, and say so once if the cloned one is broken.
 
-        There is nothing to load here: the cloned voice is synthesised by Fish
-        Audio over HTTP, so it is ready the moment the key is. What is worth
-        doing at connect time is failing loudly rather than silently — a missing
-        key would otherwise only show up as a reply that arrives in the wrong
-        voice, which is exactly the kind of fault this project has learned to
-        check for rather than assume.
+        There is nothing to load here: the cloned voice is synthesised over HTTP
+        by whichever engine the registry names — Fish Audio, or a Colab F5
+        tunnel — so it is ready the moment that engine is. What is worth doing
+        at connect time is failing loudly rather than silently: a missing key, or
+        a tunnel whose Colab session has ended, would otherwise show up only as a
+        reply arriving in the wrong voice, which is exactly the kind of fault
+        this project has learned to check for rather than assume.
         """
         voice = get_voice()
         self._cloned_voice = voice if is_custom_voice_name(voice) else ""
@@ -960,11 +961,20 @@ class JarvisLive:
             label = str(entry.get("label") or self._cloned_voice)
             why = custom_voice.problem()
             if why:
-                self.ui.write_log(
-                    f"SYS: cloned voice unavailable — {why}. "
-                    f"Replies will use the prebuilt voice.")
+                note = (f"cloned voice unavailable — {why}. "
+                        f"Replies will use the prebuilt voice.")
             else:
-                self.ui.write_log(f"SYS: အသံ — {label} (Fish Audio)")
+                # The engine is named rather than assumed. The label alone
+                # ("ဒေါ်အေးသန့်") does not say which service produced the audio,
+                # and with two engines registered that is the first thing worth
+                # knowing when the voice sounds wrong or is slow. It also goes to
+                # the console, because the console is where a restart is watched
+                # — the UI log is the only place this used to appear.
+                engine = str(entry.get("engine") or "fish").strip().lower()
+                where = {"colab": "Colab F5", "fish": "Fish Audio"}.get(engine, engine)
+                note = f"အသံ — {label} ({where})"
+            self.ui.write_log(f"SYS: {note}")
+            print(f"[Voice] {note}")
         except Exception as e:                              # noqa: BLE001
             print(f"[CustomVoice] {e}")
 
@@ -972,8 +982,8 @@ class JarvisLive:
         """Hand `text` to the cloning engine. Never blocks the receive loop.
 
         `fallback` is the audio the Live session generated for this same reply.
-        It is only used if synthesis fails, so a Fish Audio outage costs the
-        user her voice rather than the answer.
+        It is only used if synthesis fails, so an outage of the cloning engine
+        costs the user the voice, not the answer.
         """
         if self._cloned_stop is not None:
             self._cloned_stop.set()          # a new reply supersedes the last
@@ -1018,9 +1028,10 @@ class JarvisLive:
             if pcm is None:
                 if not fallback:
                     return
-                # Fish Audio could not be reached. The Live session had already
-                # generated this reply in a prebuilt voice, so the user still
-                # hears an answer — just not in her voice.
+                # The synthesis engine could not be reached — Fish Audio down, or
+                # the Colab tunnel gone with its session. The Live session had
+                # already generated this reply in a prebuilt voice, so the user
+                # still hears an answer — just not in her voice.
                 self.ui.write_log("SYS: အသံ မရနိုင်ပါ — prebuilt voice ဖြင့် ဆက်ပြောပါမည်။")
                 pcm = fallback
 
@@ -1867,10 +1878,11 @@ class JarvisLive:
                             # Held back, not played. A cloned voice cannot be
                             # sent to the Live API, so the reply is generated
                             # here and replaced by the same words spoken through
-                            # Fish Audio (see _cloned_worker). Keeping the audio
-                            # instead of dropping it costs a few hundred KB per
-                            # turn and buys the fallback: if Fish Audio cannot be
-                            # reached, the user still hears the answer. Asking
+                            # the cloning engine (see _cloned_worker). Keeping the
+                            # audio instead of dropping it costs a few hundred KB
+                            # per turn and buys the fallback: if that engine
+                            # cannot be reached, the user still hears the answer.
+                            # Asking
                             # for text instead is not an option — these Live
                             # models refuse response_modalities=["TEXT"] with a
                             # 1007, which is written up in core/gemini.py.
