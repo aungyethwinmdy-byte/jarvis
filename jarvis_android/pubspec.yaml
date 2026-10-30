@@ -1,0 +1,49 @@
+name: jarvis_android
+description: "Android Jarvis MVP - Standalone voice assistant powered by Gemini Live API"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Direct WebSocket connection for Gemini Live API
+  web_socket_channel: ^3.0.1
+
+  # Secure Storage for API Keys (never in plain text)
+  flutter_secure_storage: ^9.2.2
+
+  # App preferences (Voice selection, model selection)
+  shared_preferences: ^2.3.2
+
+  # 16kHz PCM audio stream recording (Push-to-Talk)
+  record: ^7.1.2
+
+  # 24kHz PCM audio playback
+  audioplayers: ^6.1.0
+
+  # Local Notification for Reminders
+  flutter_local_notifications: ^17.2.3
+
+  # Network requests for Weather (Open-Meteo) & Web Search
+  http: ^1.2.2
+
+  # Android Runtime Permissions
+  permission_handler: ^11.3.1
+
+  # State Management
+  provider: ^6.1.2
+
+  # Material Icons
+  cupertino_icons: ^1.0.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true

@@ -70,3 +70,11 @@ check_*_out.txt
 *.tmp
 backup/
 _74158.pdf
+
+# Mobile credentials & keystores
+api_keys.json
+*.keystore
+*.jks
+.env
+.env.*
+
