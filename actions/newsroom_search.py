@@ -23,6 +23,7 @@ WHY THE QUERY IS NEVER TRANSLATED
 """
 from actions._newsroom_common import show
 from core import newsroom_client as nr
+from core.burmese import partials
 
 
 def newsroom_search(parameters, player=None, session_memory=None) -> str:
@@ -38,9 +39,27 @@ def newsroom_search(parameters, player=None, session_memory=None) -> str:
         return f"သတင်းစောင့်ကြည့်စနစ်၏ ဒေတာဘေ့စ်ကို မချိတ်ဆက်နိုင်ပါ။ အကြောင်းရင်း: {reason}"
 
     results = nr.search_articles(query, days=days, limit=8)
+    # **A compound the outlets spell with the word inside it.** Measured
+    # 2026-10-18: `ကျောက်မျက်ပြပွဲ` found 0 in this archive while PPIB's
+    # emporium stories are titled `မြန်မာ့ကျောက်မျက်ရတနာပြပွဲ` and
+    # `ကျောက်မျက်` found 4 — the same failure the MOI tools and the
+    # state-paper database had that morning. `core.burmese.partials` cuts
+    # the compound at Burmese syllable clusters, longest first, at most three
+    # retries, and the answer says which phrase it ended up searching.
+    reduced = ""
+    if not results:
+        for cand in partials(query, cap=3):
+            results = nr.search_articles(cand, days=days, limit=8)
+            if results:
+                reduced = cand
+                break
     text = nr.format_search(query, results)
+    if reduced:
+        text = (f'ℹ️ "{query}" အပြည့်အစုံ မတွေ့လို့ "{reduced}" နဲ့ '
+                f"ရှာထားပါတယ်။\n\n" + text)
     show(player, f"NEWSROOM SEARCH — {query[:40]}", text, items=results)
-    print(f"[Newsroom] search {query!r} -> {len(results)} hit(s)")
+    print(f"[Newsroom] search {query!r} -> {len(results)} hit(s)"
+          + (f" (reduced to {reduced!r})" if reduced else ""))
     return text
 
 
@@ -55,6 +74,12 @@ TOOL = {
         "'ဘယ်လိုသတင်းတွေရှိလဲ', 'any news about X'. Pass the user's query "
         "EXACTLY as they said it — never translate it into English first, "
         "because the sources are Burmese and an English query matches nothing. "
+        "One or two words is usually better than the whole sentence — the "
+        "search matches the words themselves, and a sentence-shaped query "
+        "matches nothing. **A single compound is fine** ('ကျောက်မျက်ပြပွဲ'): "
+        "the outlets spell the emporium 'မြန်မာ့ကျောက်မျက်ရတနာပြပွဲ', and when "
+        "the full compound finds nothing the tool reduces it to 'ကျောက်မျက်' "
+        "by itself and says so (measured 2026-10-18). "
         "For a general 'what's new today' question use daily_briefing instead."
     ),
     "parameters": {

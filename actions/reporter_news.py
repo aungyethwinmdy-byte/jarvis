@@ -39,6 +39,7 @@ from __future__ import annotations
 import re
 
 from core.entities import ministries_across, people_in
+from core.burmese import partials
 from core.reporter_client import (
     all_articles_matching,
     all_articles_on,
@@ -179,6 +180,75 @@ def _extract_topic(term: str, rank_src_hint: str = "") -> str:
     return packed
 
 
+def _count_reduced(term: str, days: int) -> "tuple[int, str, str]":
+    """Count a keyword; when the whole compound undercounts, sub-phrases stand in.
+
+    Measured 2026-10-18: the owner searched `ကျောက်မျက်ပြပွဲ` and the papers
+    title the event **`မြန်မာ့ကျောက်မျက်ရတနာပြပွဲ`** — the word `ရတနာ` rides
+    inside the name — so the compound counted **1** while its stem `ကျောက်မျက်`
+    counted **53**. The same compound failure as the MOI tools had that
+    morning, one database later, with the same repair:
+    `core.burmese.partials` cuts the query at Burmese syllable clusters.
+
+    Three values are returned — one shape per measured case:
+
+    **`(n, "", "")`**  the term counted `n` as asked; `date_range_for` runs on
+    it and the answer is worded normally.
+
+    **`(n, cand, "")`**  the compound counted **0** and `cand` counted `n` —
+    the answer is built on the reduction and **says so** (`matched`-style line
+    in the caller), because "one phrase found what another could not" is part
+    of the finding.
+
+    **`(n, "", hint)`**  the compound counted a thin `n` (1–3) on its own —
+    e.g. the Sep 13 preview article — while a sub-phrase counted far more
+    (`>= 8` and `>= 4×n`). The exact count stays the count: swapping the
+    number for a stem's would drown a genuinely rare topic, and broadening it
+    silently would hide what was asked. `hint` carries the wider figure as a
+    **pointer the model can voice** — "…" one hit matched exactly, however
+    `ကျောက်မျက်` finds 53, the emporium's own coverage — without pretending
+    the user's question was answered by a different phrase.
+
+    **`(0, "", "")`**  nothing anywhere: the "not found" branch keeps its
+    three-sentence wording. **`(n < 0, …)`** is the unreachable signal, handed
+    back untouched — a dead database gets no retry, and `_unreachable()` keeps
+    saying "could not connect", which an answer built from a retry would
+    wrongly contradict.
+
+    `days` is passed through to every call, so a reduced count always counts
+    the same window the original count did.
+    """
+    n = search_count(term, days=days)
+    if n < 0:
+        return n, "", ""
+    if n == 0:
+        # **The best phrase wins, not the first.** Measured 2026-10-18: the
+        # over-split fragment `ကျောက်မျက်ပြ` itself counts 1 — the Sep 13
+        # preview row contains the compound it was cut from — so "first
+        # nonzero" would swap the emporium for that same lone row. Fragments
+        # are tried longest-first until one counts **>= 4** (a phrase with
+        # real standing); otherwise the largest count seen is used. Four is
+        # the same floor the row-based branches use below.
+        best_n, best_cand = 0, ""
+        for cand in partials(term, cap=4):
+            m = search_count(cand, days=days)
+            if m > best_n:
+                best_n, best_cand = m, cand
+            if best_n >= 4:
+                break
+        if best_n:
+            return best_n, best_cand, ""
+        return 0, "", ""
+    if n <= 3:
+        for cand in partials(term, cap=2):
+            m = search_count(cand, days=days)
+            if m >= 8 and m >= 4 * n:
+                return (n, "",
+                        f'ℹ️ "{cand}" နဲ့ ရှာပါက သတင်း '
+                        f"{to_burmese_digits(m)} ခု အထိ ရှိပါတယ်။")
+    return n, "", ""
+
+
 
 
 
@@ -242,7 +312,7 @@ def reporter_news(parameters: dict = None, player=None, session_memory=None,
     if act in ("search", "count", "has"):
         if not term:
             return "ဘာအကြောင်း ရှာရမလဲ ပြောပါ။"
-        n = search_count(term, days=win)
+        n, reduced, thin_hint = _count_reduced(term, win)
         if n < 0:
             # A failed count is not a count of zero. See _unreachable.
             return _unreachable()
@@ -253,9 +323,15 @@ def reporter_news(parameters: dict = None, player=None, session_memory=None,
                     f"{_window_line()}\n"
                     f"⚠️ 'အရင် မရှိခဲ့ဘူး' လို့ မဆိုလိုပါ — "
                     f"ဒီကာလအတွင်းမှာ မတွေ့တာပါ။")
-        rng = date_range_for(term, days=win)
+        rng = date_range_for(reduced or term, days=win)
         out = [f"'{term}' နဲ့ ပတ်သက်တဲ့ သတင်း{scope} "
-               f"{to_burmese_digits(n)} ခု တွေ့ပါတယ်။", ""]
+               f"{to_burmese_digits(n)} ခု တွေ့ပါတယ်။"]
+        if reduced:
+            out.append(f'ℹ️ "{term}" အပြည့်အစုံ နဲ့ မကိုက်လို့ '
+                       f'"{reduced}" နဲ့ ရှာထားပါတယ်။')
+        elif thin_hint:
+            out.append(thin_hint)
+        out.append("")
         if rng.get("oldest"):
             out.append(f"ရက်စွဲ အကွာအဝေး — {_date(rng['oldest'])} ကနေ "
                        f"{_date(rng['newest'])} အထိ")
@@ -291,6 +367,29 @@ def reporter_news(parameters: dict = None, player=None, session_memory=None,
         rows = content_rows(raw)
         note = _paper_scope(date, paper)[1]
 
+        # **A compound the papers spell with the word inside it.** Measured
+        # 2026-10-18: that day's paper holds the emporium under
+        # `မြန်မာ့ကျောက်မျက်ရတနာပြပွဲ` while the query `ကျောက်မျက်ပြပွဲ`
+        # matches nothing server-side, so the day's own answer said
+        # "မတွေ့ပါ" about news it had. Retried as sub-phrases — but only
+        # when the day itself is readable and no paper-scope note is
+        # already explaining the emptiness: a limitation must not be
+        # papered over with a lucky hit.
+        used_partial = ""
+        if not rows and term and not note and not _read_failed(date):
+            # Best rows win, not first rows — see `_count_reduced` above for
+            # the over-split-fragment trap (2026-10-18: the fragment kept the
+            # single preview row while the stem held the day's whole series).
+            best_raw, best_cand, best_rows = raw, "", rows
+            for cand in partials(term, cap=4):
+                raw = articles_on(date, cand, limit, paper=paper)
+                cand_rows = content_rows(raw)
+                if len(cand_rows) > len(best_rows):
+                    best_raw, best_cand, best_rows = raw, cand, cand_rows
+                if len(best_rows) >= 4:
+                    break
+            raw, rows, used_partial = best_raw, best_rows, best_cand
+
         if not rows:
             # Three distinct sentences — see _unreachable / _paper_scope above.
             if note:
@@ -304,7 +403,11 @@ def reporter_news(parameters: dict = None, player=None, session_memory=None,
         q = ('"' + term + '" နဲ့ ကိုက်တဲ့ ') if term else ''
         out = [f"{_date(date)} — "
                f"{q}"
-               f"သတင်း {to_burmese_digits(len(rows))} ခု:", ""]
+               f"သတင်း {to_burmese_digits(len(rows))} ခု:"]
+        if used_partial:
+            out.append(f'ℹ️ "{term}" အပြည့်အစုံ နဲ့ မကိုက်လို့ '
+                       f'"{used_partial}" နဲ့ ရှာထားတာပါ။')
+        out.append("")
         out += [_article_line(a) for a in rows]
         if len(raw) > len(rows):
             dropped = len(raw) - len(rows)
@@ -594,9 +697,24 @@ def reporter_news(parameters: dict = None, player=None, session_memory=None,
         if not term:
             return "ဘယ်သူ/ဘာအကြောင်း ရှာရမလဲ ပြောပါ။"
         days_rows = days_for(term, 40, days=win)
+        # The compound reduction from `_count_reduced` — the same query can
+        # count 0 for `ကျောက်မျက်ပြပွဲ` and 53 for `ကျောက်မျက်` (2026-10-18),
+        # and a calendar of zeros is no answer to "which days".
+        whichday_used = ""
         if not days_rows:
             if _read_failed(_date_or_newest(days=win)):
                 return _unreachable()
+            # Best rows win, not first rows — see `_count_reduced` above for
+            # the over-split-fragment trap (2026-10-18).
+            best_day, best_cand = days_rows, ""
+            for cand in partials(term, cap=4):
+                cand_rows = days_for(cand, 40, days=win)
+                if len(cand_rows) > len(best_day):
+                    best_day, best_cand = cand_rows, cand
+                if len(best_day) >= 4:
+                    break
+            days_rows, whichday_used = best_day, best_cand
+        if not days_rows:
             scope = (f" လွန်ခဲ့တဲ့ {to_burmese_digits(win)} ရက်အတွင်း"
                      if win else "")
             return (f"'{term}' နဲ့ ကိုက်တဲ့ သတင်း{scope} မတွေ့ပါ။\n\n"
@@ -605,7 +723,19 @@ def reporter_news(parameters: dict = None, player=None, session_memory=None,
                     f"ဒီကာလအတွင်းမှာ မတွေ့တာပါ။")
         total = sum(d["count"] for d in days_rows)
         out = [f"'{term}' — သတင်း {to_burmese_digits(total)} ခု၊ "
-               f"ရက် {to_burmese_digits(len(days_rows))} ရက်မှာ:", ""]
+               f"ရက် {to_burmese_digits(len(days_rows))} ရက်မှာ:"]
+        if whichday_used:
+            out.append(f'ℹ️ "{term}" အပြည့်အစုံ နဲ့ မကိုက်လို့ '
+                       f'"{whichday_used}" နဲ့ ရှာထားတာပါ။')
+        elif total <= 3:
+            # A calendar this thin is usually the compound-miss: the exact
+            # phrase appears once or twice while its stem holds the series.
+            # The pointer comes from the same reduction as `search` — the
+            # count stays, the answer gains the wider figure.
+            _, _, thin_hint = _count_reduced(term, win)
+            if thin_hint:
+                out.append(thin_hint)
+        out.append("")
         for d in days_rows:
             papers = "၊ ".join(d.get("papers") or [])
             bar = "▇" * min(d["count"], 20)
@@ -623,15 +753,44 @@ def reporter_news(parameters: dict = None, player=None, session_memory=None,
             return "ဘာအကြောင်း ရှာရမလဲ ပြောပါ။"
         raw = timeline(term, limit, days=win)
         rows = content_rows(raw)
+        # The same compound reduction — see `_count_reduced` (2026-10-18).
+        hist_used = ""
         if not rows:
             if _read_failed(_date_or_newest(days=win)):
                 return _unreachable()
+            # Best rows win, not first rows — see `_count_reduced` above for
+            # the over-split-fragment-wins-one-row trap (2026-10-18).
+            best_raw, best_cand, best_rows = raw, "", rows
+            for cand in partials(term, cap=4):
+                raw = timeline(cand, limit, days=win)
+                cand_rows = content_rows(raw)
+                if len(cand_rows) > len(best_rows):
+                    best_raw, best_cand, best_rows = raw, cand, cand_rows
+                if len(best_rows) >= 4:
+                    break
+            raw, rows, hist_used = best_raw, best_rows, best_cand
+        if not rows:
             return (f"'{term}' နဲ့ ပတ်သက်တဲ့ သတင်း မတွေ့ပါ။\n\n"
                     f"{_window_line()}\n"
                     f"⚠️ 'အရင် မရှိခဲ့ဘူး' လို့ မဆိုလိုပါ — "
                     f"ဒီကာလအတွင်းမှာ မတွေ့တာပါ။")
         out = [f"'{term}' — အစောဆုံး {_short_date(rows[0].get('issue_date'))} "
-               f"ကတည်းက {to_burmese_digits(len(rows))} ခု တွေ့ပါတယ်:", ""]
+               f"ကတည်းက {to_burmese_digits(len(rows))} ခု တွေ့ပါတယ်:"]
+        if hist_used:
+            out.append(f'ℹ️ "{term}" အပြည့်အစုံ နဲ့ မကိုက်လို့ '
+                       f'"{hist_used}" နဲ့ ရှာထားတာပါ။')
+        elif len(rows) <= 3 and len(rows) < limit:
+            # A history this thin is usually the compound-miss — the exact
+            # phrase appears in one preview piece while its stem holds the
+            # series (`ကျောက်မျက်ပြပွဲ`: 1 row; `ကျောက်မျက်`: 53 — measured
+            # 2026-10-18). The `< limit` guard keeps a deliberately small
+            # `limit` from masquerading as a thin history: a truncated
+            # listing is not a rare topic. The pointer comes from the same
+            # reduction as `search`; the count stays.
+            _, _, thin_hint = _count_reduced(term, win)
+            if thin_hint:
+                out.append(thin_hint)
+        out.append("")
         for a in rows:
             out.append(f"  {_short_date(a.get('issue_date'))} — "
                        f"{_article_line(a).strip().lstrip('• ')}")
@@ -651,7 +810,14 @@ TOOL = {
         "Search မြန်မာ့အလင်း and ကြေးမုံ (the state papers) for news. "
         "Actions: "
         "'search' — 'X အကြောင်း သတင်းရှိလား' → how many articles and over which "
-        "dates. Do NOT list articles for this, just the count and the range; "
+        "dates. Do NOT list articles for this, just the count and the range. "
+        "**Pass ONE or TWO words, never the whole sentence** — this is a "
+        "substring match, so a sentence matches nothing. **A single compound is "
+        "fine** ('ကျောက်မျက်ပြပွဲ'): when the papers spell the event with "
+        "another word inside the name (မြန်မာ့ကျောက်မျက်ရတနာပြပွဲ), the tool "
+        "reduces it to 'ကျောက်မျက်' by itself and the answer says so — measured "
+        "2026-10-18, the compound counted 1 article while the reduction counted "
+        "53. "
         "'byday' — 'ဦးမင်းအောင်လှိုင် သတင်း ဘယ်နှစ်ရက်က ရှိလား' → which days carry "
         "the keyword and how many each, so the user can pick a date. Works for "
         "a person's name, a ministry, or any topic; "
@@ -723,7 +889,16 @@ TOOL = {
             },
             "query": {
                 "type": "STRING",
-                "description": "Burmese keyword, e.g. 'ပညာရေး', 'ဆီဈေး'. Do not translate.",
+                "description": ("For 'search'/'byday'/'timeline': a **keyword** — "
+                                "one or two words like 'ပညာရေး', 'ဆီဈေး'. Do NOT "
+                                "pass the whole question — a sentence-shaped "
+                                "query matches nothing. A single compound is "
+                                "fine ('ကျောက်မျက်ပြပွဲ') — when the papers "
+                                "spell the event with the word inside the name "
+                                "('မြန်မာ့ကျောက်မျက်ရတနာပြပွဲ') the tool reduces "
+                                "it by itself and the answer says which phrase "
+                                "it used. For 'people'/'day': the rank or topic "
+                                "the user said. Do not translate."),
             },
             "date": {
                 "type": "STRING",

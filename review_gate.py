@@ -55,6 +55,7 @@ WHAT EACH CHECK IS FOR (and the real defect it descends from)
 from __future__ import annotations
 
 import argparse
+import os
 import ast
 import json
 import re
@@ -348,6 +349,15 @@ def g10_memory_budget(rep: Report) -> None:
 
 # ── the suites ────────────────────────────────────────────────────────────────
 def run_suites(rep: Report, names: list[str]) -> None:
+    # **The suites print Burmese, the child console does not.** Everything
+    # here can be checked from a cp1252 console — measured 2026-10-18 when the
+    # gate reported `check_moi_index.py exited 1 in 0s` and the crash was
+    # `UnicodeEncodeError: 'charmap' codec` inside the *child*, which this
+    # gate's own `-X utf8`-less spawn had forced. Each suite inherits a
+    # UTF-8 interpreter instead: the check stays the check, the pipeline the
+    # check is allowed to print through becomes the one every other entry
+    # point in this project already assumes.
+    env = {**os.environ, "PYTHONUTF8": "1"}
     for name in names:
         script = ROOT / name
         if not script.is_file():
@@ -356,7 +366,8 @@ def run_suites(rep: Report, names: list[str]) -> None:
         t0 = time.time()
         try:
             proc = subprocess.run([sys.executable, str(script)], cwd=str(ROOT),
-                                  capture_output=True, text=True, timeout=600)
+                                  capture_output=True, text=True, timeout=600,
+                                  env=env, encoding="utf-8")
             took = time.time() - t0
             if proc.returncode == 0:
                 rep.add("S", INFO, f"{name} passed in {took:.0f}s")
@@ -372,6 +383,10 @@ def run_suites(rep: Report, names: list[str]) -> None:
 
 # ── main ──────────────────────────────────────────────────────────────────────
 def main() -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser(description="The Mark-LIV review gate (read-only).")
     ap.add_argument("--static", action="store_true", help="static checks only (seconds)")
     ap.add_argument("--full", action="store_true", help="add check_agent.py (~2 min) and the rest")

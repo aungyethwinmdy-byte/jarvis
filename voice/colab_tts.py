@@ -89,7 +89,7 @@ from pathlib import Path
 import urllib3
 from urllib3.util import Retry, Timeout
 
-COLAB_URL = "https://serum-penguin-width-cyber.trycloudflare.com"
+COLAB_URL = "https://spare-cancelled-confidence-refresh.trycloudflare.com"
 
 # One warm line. F5 renders a sentence in a few seconds once the checkpoint is in
 # memory; this is the ceiling that turns a stuck server into the fallback voice.

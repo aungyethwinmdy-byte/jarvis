@@ -223,6 +223,13 @@ def _do_search(p: dict) -> str:
         lines.append("ℹ️ အပြည့်အစုံ ဖတ်ချင်ရင် `action='story'` နဲ့ လင့်ကို ခေါ်ပါ။ "
                      "ဒီအဖြေက သိမ်းထားတဲ့ MOI index ထဲကပါ — "
                      "ရင်းမြစ်နဲ့ ရက်စွဲကို ဖတ်ပြပါ။")
+        # A stored answer can still be an ANSWER-ABOUT-YESTERDAY: when the copy
+        # is days behind the calendar, refresh it now so the next question is
+        # not answered from the same blind spot (say so either way).
+        if ix.catchup_if_stale():
+            lines.append("ℹ️ သိမ်းထားတဲ့ MOI index က ရက်အတော် ဟောင်းနေလို့ "
+                         "နောက်ကွယ်မှာ အလိုအလျောက် ပြန်ဆွဲနေပါတယ် — "
+                         "နောက်ထပ် မေးခွန်းတွေကို index အသစ်နဲ့ ဖြေပါမယ်။")
         return "\n".join(lines)
 
     # ── the index had nothing: go live, and say which of the two it was ──────
@@ -275,6 +282,28 @@ def _do_search(p: dict) -> str:
             if live:
                 query = tok
                 break
+    # **A single compound hits the same wall live as it did in the index.**
+    # Measured 2026-10-18: 'ကျောက်မျက်ပြပွဲ' matched nothing on the site's own
+    # search while the emporium articles are titled 'မြန်မာ့ကျောက်မျက်ရတနာ
+    # ပြပွဲ' — the whole story sits behind the stem 'ကျောက်မျက်', which the
+    # whitespace token loop above can never reach from a query with no space.
+    # Syllable-boundary sub-phrases (`moi_index.partials`), capped, and
+    # `query` becomes the phrase that worked so the answer names it.
+    # **Best result, not first result** — the same over-split-fragment trap
+    # `moi_index.search` and the reporter's `_count_reduced` avoid: a fragment
+    # can match the rows that spell the compound verbatim, so "first nonzero"
+    # could stop at one preview instead of the series the stem returns. Keep
+    # the largest listing; stop early once one reaches 4.
+    if not live:
+        best_live, best_cand = None, ""
+        for cand in ix.partials(mention or query, cap=4):
+            cand_live = mc.search_site(cand, pages=1, limit=max(limit, 12))
+            if best_live is None or len(cand_live) > len(best_live):
+                best_live, best_cand = cand_live, cand
+            if len(best_live) >= 4:
+                break
+        if best_live:
+            live, query = best_live, best_cand
     if live:
         lines = [f"📇 MOI index မှာ မတွေ့ပါ — **🌐 live moi.gov.mm** မှ "
                  f"{to_burmese_digits(len(live))} ခု တွေ့ပါတယ်။"]
@@ -283,6 +312,10 @@ def _do_search(p: dict) -> str:
         lines.append("")
         lines.append("ℹ️ ဒီအဖြေက live ဆိုက်ကပါ — ရက်စွဲမပါပါ။ "
                      "အပြည့်အစုံအတွက် `action='story'` ခေါ်ပါ။")
+        if ix.catchup_if_stale():
+            lines.append("ℹ️ သိမ်းထားတဲ့ MOI index က ရက်အတော် ဟောင်းနေလို့ "
+                         "နောက်ကွယ်မှာ အလိုအလျောက် ပြန်ဆွဲနေပါတယ် — "
+                         "နောက်ထပ် မေးခွန်းတွေကို index အသစ်နဲ့ ဖြေပါမယ်။")
         return "\n".join(lines)
 
     if not ix.count():
@@ -534,7 +567,9 @@ TOOL = {
         "the whole question** — a phrase search matches nothing, and the tool then "
         "retries its own words and says which term worked. If a `days`/`date` "
         "filter is applied, the answer says how many undated articles it had to "
-        "leave out.\n"
+        "leave out. **When the stored index is days behind the calendar the tool "
+        "refreshes it in the background by itself** — no `update` call needed "
+        "first, and the answer says when that happened.\n"
         "\n"
         "action='search' with `mention` + `kind` — an article that **names** a "
         "person, organisation or place (kind: 'people' | 'organizations' | "
@@ -592,7 +627,11 @@ TOOL = {
                                 "Do NOT pass the whole question: the search matches "
                                 "phrases, so 'နိုင်ငံတော်သမ္မတ အိန္ဒိယ ခရီးစဉ်' finds "
                                 "nothing while 'အိန္ဒိယ ခရီးစဉ်' finds the trip. "
-                                "Do not translate."),
+                                "**A single compound is fine** ('ကျောက်မျက်ပြပွဲ') — "
+                                "if the site spells the event with a word inside the "
+                                "name ('မြန်မာ့ကျောက်မျက်ရတနာပြပွဲ'), the tool reduces "
+                                "it to 'ကျောက်မျက်' by itself and the answer says which "
+                                "phrase it used. Do not translate."),
             },
             "mention": {
                 "type": "STRING",

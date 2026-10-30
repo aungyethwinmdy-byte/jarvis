@@ -67,7 +67,7 @@ import re
 import sqlite3
 import threading
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from core import entities as ent
@@ -698,6 +698,24 @@ def _tokens(term: str) -> list[str]:
     return sorted(toks, key=len, reverse=True)
 
 
+# ── Partial-phrase fallback lives in `core/burmese.py` (2026-10-18) ──────────
+#
+# The index matches a query as a **contiguous substring** of the flattened
+# haystack, and the whitespace-token fallback (`_tokens`) never fires for a
+# single-word query — and Burmese compounds are single words. Measured
+# 2026-10-18: the owner asked for `ကျောက်မျက်ပြပွဲ`, but the site spells the
+# event `မြန်မာ့ကျောက်မျက်ရတနာပြပွဲ` — so every LIKE passed over the emporium
+# articles while the stem `ကျောက်မျက်` held the story. The sub-phrase cutter
+# that fixes this served only this index for an hour; the same day the
+# reporter database search and the newsroom archive search missed the
+# emporium the same way, and the cutter moved to `core/burmese.py` rather
+# than be copied. Re-exported here so this search, the earlier callers
+# (`moi_news`, `moi_research`) and `check_moi_index.py` keep reading
+# `moi_index.partials` unchanged.
+from core.burmese import partials  # noqa: F401  (re-exported on purpose)
+
+
+
 # `"search_text" LIKE ? ESCAPE '\'` — a quoted column and a single-quoted escape
 # character. Written once so the two places that build it cannot drift apart.
 _LIKE_CLAUSE = '"search_text" LIKE ? ESCAPE \'\\\''
@@ -716,7 +734,11 @@ def search(term: str = "", section: str = "", date: str = "", days: int = 0,
       `'နိုင်ငံတော်သမ္မတ အိန္ဒိယ ခရီးစဉ်'` matches nothing while its words
       `'အိန္ဒိယ ခရီးစဉ်'` rank the trip first. The fallback tries the query's own
       words (all of them, so a two-word event stays an AND) and reports which it
-      used.
+      used. **2026-10-18, one step deeper:** a *compound* (`ကျောက်မျက်ပြပွဲ`)
+      has no space for that fallback to work with, and the site may spell the
+      event with the word inside it — `မြန်မာ့ကျောက်မျက်ရတနာပြပွဲ` — so
+      syllable-boundary sub-phrases (`partials`) are tried next, longest
+      first, and `matched` names the one that finally hit.
     * `undated_skipped` counts rows a `date`/`days` filter dropped because they
       **carry no date** — the site's own search returns items with none, and a
       silent drop is how "there is no such news" gets said about an article we
@@ -760,14 +782,38 @@ def search(term: str = "", section: str = "", date: str = "", days: int = 0,
             if toks:
                 rows = run(toks)
                 matched = " ".join(toks) if rows else ""
+        if needle and not rows:
+            # **A compound the site spells with an inserted word.** Measured
+            # 2026-10-18: `ကျောက်မျက်ပြပွဲ` matched nothing and the whitespace
+            # fallback above never fired (one word, no spaces), while the site
+            # writes `မြန်မာ့ကျောက်မျက်ရတနာပြပွဲ` — the emporium articles sat
+            # behind the stem `ကျောက်မျက်`. Sub-phrases are tried longest first
+            # and the answer NAMES the phrase that finally hit.
+            # **Best rows, not first rows.** An over-split fragment can match
+            # the few rows that carry the compound verbatim (the fragment was
+            # cut from the query, so previews of the compound contain it) —
+            # "first nonzero" would then hide the series the real stem holds.
+            # Like the reporter database's `_count_reduced` the same morning:
+            # keep the largest listing, stop early once one reaches 4.
+            best_rows, best_cand = None, ""
+            for cand in partials(term):
+                cand_rows = run([cand])
+                if best_rows is None or len(cand_rows) > len(best_rows):
+                    best_rows, best_cand = cand_rows, cand
+                if len(best_rows) >= 4:
+                    break
+            if best_rows:
+                rows, matched = best_rows, best_cand
 
         undated = 0
         if needle and (date or floor):
-            # Same query, but on the rows the date filter had to leave out.
+            # Same query, but on the rows the date filter had to leave out —
+            # the phrase the answer is actually built from (`matched`) when a
+            # fallback was needed, so the count matches what was shown.
             w = [x for x in where if '"published_date"' not in x]
             a = [args[i] for i, x in enumerate(where) if '"published_date"' not in x]
             w += [_UNDATED_CLAUSE, _LIKE_CLAUSE]
-            a.append(_like(needle))
+            a.append(_like(matched or needle))
             undated = con.execute(
                 f'SELECT COUNT(*) AS n FROM "{TABLE}" WHERE ' + " AND ".join(w),
                 a).fetchone()["n"]
@@ -932,7 +978,8 @@ def crawl(sections: tuple[str, ...] = (), pages: int = CRAWL_PAGES,
     known = known_ids()
     first_pass = not known                      # no frontier yet: initial fill
     body_fetches = 0
-    rows: list[dict] = []
+    rows: list[dict] = []                       # one section's batch, flushed below
+    new_total = stored_total = 0
     for slug in wanted:
         entry = {"label": mc.SECTION_LABEL.get(slug, slug), "cards": 0,
                  "new": 0, "errors": 0}
@@ -945,7 +992,7 @@ def crawl(sections: tuple[str, ...] = (), pages: int = CRAWL_PAGES,
             continue
         entry["cards"] = len(cards)
         for card in new_cards(cards, known, stop_after_known=stop_after_known):
-            if len(rows) >= max_fetch:
+            if new_total >= max_fetch:
                 break
             content, date, author = "", card.get("issue_date", ""), ""
             if fetch_bodies and card.get("url"):
@@ -958,7 +1005,7 @@ def crawl(sections: tuple[str, ...] = (), pages: int = CRAWL_PAGES,
                         page = mc.article_page(card["url"])
                         content = page.get("text", "")
                         date = date or page.get("date", "")
-                        author = page.get("author", "")
+                        author = author or page.get("author", "")
                     except Exception as e:                  # noqa: BLE001
                         entry["errors"] += 1
                         report["errors"].append(
@@ -971,10 +1018,21 @@ def crawl(sections: tuple[str, ...] = (), pages: int = CRAWL_PAGES,
             rows.append(make_row(card, content, date, author))
             known.add(_key(card))
             entry["new"] += 1
+        # **The batch is stored per section, not once at the end.** Measured
+        # 2026-10-18: the scheduled crawl has been dying mid-run for days
+        # (Task Scheduler last result `-1073741510` — process killed), and a
+        # full-run flush loses every finished section when it does. One
+        # section's rows are worth minutes of polite requests against a
+        # government site; they survive the kill when they are committed.
+        new_total += len(rows)
+        stored_total += upsert(rows)
+        rows = []
         report["sections"][slug] = entry
+        if new_total >= max_fetch:
+            break
 
-    report["new"] = len(rows)
-    report["stored"] = upsert(rows)
+    report["new"] = new_total
+    report["stored"] = stored_total
     report["total"] = count()
     report["finished"] = now_mmt().isoformat(timespec="seconds")
     set_meta("last_run", report["finished"])
@@ -983,6 +1041,99 @@ def crawl(sections: tuple[str, ...] = (), pages: int = CRAWL_PAGES,
     set_meta("last_attempt", report["finished"])
     set_meta("last_attempt_result", f"ok: {report['new']} new")
     return report
+
+
+# ── Keeping the index fresh without being asked (2026-10-18) ─────────────────
+#
+# The index is the FIRST source every MOI search reads, so its age is an
+# answer's blind spot. Measured 2026-10-18: the crawler last succeeded on
+# 2026-10-06 and the Task Scheduler run keeps dying mid-crawl for days
+# (`last_attempt: 2026-10-14 unreachable`, then killed runs with no record), so
+# a search for နိုင်ငံ့ကျောက်မျက်ပြပွဲ (mid-October) answered from an index that
+# ended on the 5th. The site was reachable at the very same hour.
+#
+# `catchup_if_stale()` is the bouncer the search paths call after a live
+# fallback answered: if the index is days behind the Yangon date and the site
+# is reachable, a bounded `crawl()` starts on a daemon thread. It never blocks
+# a voice turn, it never runs twice concurrently (an event, not a race), and it
+# does not re-fire for 4 hours once it has run — a search storm must not turn
+# into a crawl storm.
+
+_CATCHUP_RUNNING = threading.Event()
+_CATCHUP_LOCK = threading.Lock()
+_CATCHUP_GATE_HOURS = 4
+
+
+def is_stale(max_age_days: int = 2) -> bool:
+    """True when the index's newest article is over `max_age_days` old.
+
+    An **empty** index is not "stale" — it has never run, and the search paths
+    already say so in different words. An unreadable newest date (an article
+    the site did not date, most often) is reported as fresh: a limitation must
+    not send the crawler off after a date it cannot even parse.
+    """
+    if not count():
+        return False
+    newest = date_range()[1]
+    if not newest:
+        return False
+    try:
+        age = (now_mmt().date() - datetime.fromisoformat(newest).date()).days
+    except (TypeError, ValueError):
+        return False
+    return age > max(0, int(max_age_days))
+
+
+def catchup_if_stale(max_age_days: int = 2) -> bool:
+    """Start a background refresh when the index is behind the calendar.
+
+    Returns whether a crawl **started** — the caller may say so in its answer
+    ("the stored index is being refreshed in the background"). A crawl that is
+    already running, or one that ran within the gate window, answers quietly
+    with `False`: repeated searches must not stack crawlers.
+
+    The thread is a daemon on purpose: killing the host process mid-crawl is
+    the measured failure mode of the scheduled task, and `crawl()` now commits
+    each section as it finishes, so the work already done survives it.
+    """
+    if _CATCHUP_RUNNING.is_set():
+        return False
+    stamp = meta("last_catchup", "")
+    if stamp:
+        try:
+            if now_mmt() - datetime.fromisoformat(stamp) < timedelta(
+                    hours=_CATCHUP_GATE_HOURS):
+                return False
+        except (TypeError, ValueError):
+            pass
+    if not is_stale(max_age_days):
+        return False
+    ok, _why = mc.available()
+    if not ok:
+        # `available()` caches its negative for the TTL, so a dead route can
+        # gate a catch-up without adding a request to the voice turn.
+        return False
+    # Set the event INSIDE a lock so two voice turns searching the same stale
+    # morning cannot each walk away thinking they spawned the crawler.
+    with _CATCHUP_LOCK:
+        if _CATCHUP_RUNNING.is_set():
+            return False
+        _CATCHUP_RUNNING.set()
+    threading.Thread(target=_catchup_worker, name="moi-index-catchup",
+                     daemon=True).start()
+    return True
+
+
+def _catchup_worker() -> None:
+    try:
+        crawl()
+        print("[MOI] background catch-up crawl finished", flush=True)
+    except Exception as e:                                  # noqa: BLE001
+        print(f"[MOI] background catch-up crawl failed: "
+              f"{type(e).__name__}: {e}", flush=True)
+    finally:
+        set_meta("last_catchup", now_mmt().isoformat(timespec="seconds"))
+        _CATCHUP_RUNNING.clear()
 
 
 def status() -> dict:

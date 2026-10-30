@@ -499,13 +499,22 @@ def moi_news(parameters: dict = None, player=None, session_memory=None, **_) -> 
         # 'မြန်မာ့ကျောက်မျက်ရတနာပြပွဲ'. Syllable-boundary sub-phrases
         # (`moi_index.partials`) are tried here, longest first, one request
         # each, and `term` becomes the phrase that finally matched so the
-        # answer says what it actually searched.
+        # answer says what it actually searched. **Best result, not first
+        # result**: an over-split fragment also matches the few rows that
+        # spell the compound verbatim, so "first nonzero" could keep the
+        # preview and hide the series the real stem returns — the same rule
+        # `moi_index.search`'s fallback and the reporter's `_count_reduced`
+        # use: keep the largest listing, stop early once one reaches 4.
         if not hits:
+            best_hits, best_cand = None, ""
             for cand in ix.partials(term, cap=_PARTIAL_TRIES):
-                hits = mc.search_site(cand, pages=1, limit=_DISPLAY_MAX)
-                if hits:
-                    term = cand
+                cand_hits = mc.search_site(cand, pages=1, limit=_DISPLAY_MAX)
+                if best_hits is None or len(cand_hits) > len(best_hits):
+                    best_hits, best_cand = cand_hits, cand
+                if len(best_hits) >= 4:
                     break
+            if best_hits:
+                hits, term = best_hits, best_cand
         if not hits:
             hits = mc.search(term, sections=(slug,) if slug else (),
                              pages=_SEARCH_PAGES, limit=_DISPLAY_MAX)

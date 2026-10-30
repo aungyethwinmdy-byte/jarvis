@@ -358,6 +358,35 @@ def _search(mi) -> None:
     check("…and the newest article comes first",
           hits[0]["published_date"] >= hits[1]["published_date"], True)
 
+    # ── Measured 2026-10-18: the emporium question ──────────────────────────
+    # The owner asked for `ကျောက်မျက်ပြပွဲ` while the site writes
+    # `မြန်မာ့ကျောက်မျက်ရတနာပြပွဲ` — the whole `ရတနာ` word sits inside the
+    # site's name, so the query is not a substring of the title and the
+    # whitespace-token fallback has nothing to split (one word). Every search
+    # returned 0 against an index that held the story — the same failure as
+    # the whole-question query of 2026-10-03, one level deeper.
+    _head("a compound the site spells with the word inside it still finds the event")
+    gem = mi.make_row({"id": "90003", "url": "/news/90003",
+                       "headline": "(၆၁) ကြိမ်မြောက် မြန်မာ့ကျောက်မျက်ရတနာပြပွဲကို "
+                                   "အောက်တိုဘာ ၈ ရက်မှစ ကျင်းပမည်",
+                       "summary": "ရတနာပြပွဲ နိုင်ငံတော်မြို့တော်မှာ ဖွင့်လှစ်",
+                       "section": "other-news",
+                       "section_label": "ပြည်တွင်းသတင်း",
+                       "issue_date": "2026-10-01"})
+    mi.upsert([gem])
+    offcuts = mi.partials("ကျောက်မျက်ပြပွဲ")
+    check("partials cut at syllables, longest and leftmost first",
+          offcuts[:3], ["ကျောက်မျက်ပြ", "ကျောက်မျက်", "မျက်ပြပွဲ"])
+    check("…and a short query needs no reduction", mi.partials("ဆန်"), [])
+    check("…and the full query is never its own fallback",
+          "ကျောက်မျက်ပြပွဲ" in offcuts, False)
+    rep = mi.search("ကျောက်မျက်ပြပွဲ")
+    check("the compound finds the emporium article", rep["total"], 1)
+    check("…and NAMES the reduced phrase that matched, not silently",
+          rep["matched"], "ကျောက်မျက်")
+    check("a phrase that still matches nothing stays quiet",
+          mi.search("ကျောက်မျက်ပြပွဲ", section="မရှိသောကဏ္ဍ")["total"], 0)
+
 
 # ── 5. distinct-entity search ────────────────────────────────────────────────
 
