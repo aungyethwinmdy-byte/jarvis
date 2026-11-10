@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 /// Utility to wrap raw PCM audio chunks into standard WAV format.
@@ -58,5 +59,21 @@ class PcmConverter {
     wavBytes.setRange(44, 44 + dataSize, pcmData);
 
     return wavBytes;
+  }
+
+  /// Computes Root Mean Square (RMS) energy level of 16-bit little-endian PCM audio.
+  /// Used for Voice Activity Detection (VAD), barge-in speech detection, and echo differentiation.
+  static double calculateRms(Uint8List pcmData) {
+    if (pcmData.isEmpty) return 0.0;
+    final sampleCount = pcmData.length ~/ 2;
+    if (sampleCount == 0) return 0.0;
+
+    double sumSquares = 0.0;
+    final byteData = ByteData.sublistView(pcmData);
+    for (int i = 0; i < sampleCount; i++) {
+      final sample = byteData.getInt16(i * 2, Endian.little);
+      sumSquares += sample * sample;
+    }
+    return math.sqrt(sumSquares / sampleCount);
   }
 }

@@ -4,6 +4,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 class AppPrefs {
   static const String _keyVoiceName = 'voice_name';
   static const String _keyModelName = 'model_name';
+  static const String _keyWakeWordEnabled = 'wake_word_enabled';
+  static const String _keyWakeWordThreshold = 'wake_word_threshold';
+  static const String _keyHandsFreeEnabled = 'hands_free_enabled';
+
+  // Default threshold for openWakeWord hey_jarvis model
+  static const double defaultWakeWordThreshold = 0.15;
 
   // Allowed Gemini Live prebuilt voices
   static const List<String> availableVoices = [
@@ -50,5 +56,36 @@ class AppPrefs {
   static Future<void> saveModelName(String model) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_keyModelName, model);
+  }
+
+  static Future<bool> isWakeWordEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_keyWakeWordEnabled) ?? true;
+  }
+
+  static Future<void> setWakeWordEnabled(bool enabled) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyWakeWordEnabled, enabled);
+  }
+
+  static Future<double> getWakeWordThreshold() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getDouble(_keyWakeWordThreshold);
+    return saved ?? defaultWakeWordThreshold;
+  }
+
+  static Future<void> setWakeWordThreshold(double threshold) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_keyWakeWordThreshold, threshold);
+  }
+
+  static Future<bool> isHandsFreeEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_keyHandsFreeEnabled) ?? true;
+  }
+
+  static Future<void> setHandsFreeEnabled(bool enabled) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_keyHandsFreeEnabled, enabled);
   }
 }

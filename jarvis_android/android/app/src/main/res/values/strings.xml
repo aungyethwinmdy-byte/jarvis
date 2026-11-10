@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="accessibility_service_desc">JARVIS uses accessibility only when you ask by voice: tap the camera shutter once to take a photo, read the current screen once to tell you what is on it, or scroll once when you ask. It never reads screens in the background, never reads password, PIN or banking screens, and never reads OTP or banking notifications aloud.</string>
+</resources>

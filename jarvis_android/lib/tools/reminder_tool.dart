@@ -2,8 +2,9 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'base_tool.dart';
+import 'device_channel.dart';
 
-/// Reminder tool that sets local Android notifications on the phone.
+/// Reminder tool that sets reliable Android notifications on the phone.
 class ReminderTool extends BaseTool {
   final FlutterLocalNotificationsPlugin _notificationsPlugin =
       FlutterLocalNotificationsPlugin();
@@ -27,7 +28,8 @@ class ReminderTool extends BaseTool {
           },
           'in_minutes': {
             'type': 'INTEGER',
-            'description': 'Minutes from now when the reminder should trigger (e.g. 5, 10, 30)',
+            'description':
+                'Minutes from now when the reminder should trigger (e.g. 5, 10, 30)',
           },
         },
         'required': ['title', 'in_minutes'],
@@ -36,28 +38,32 @@ class ReminderTool extends BaseTool {
   Future<void> _ensureInitialized() async {
     if (_isInitialized) return;
 
-    const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
-    const initSettings = InitializationSettings(android: androidSettings);
+    try {
+      const androidSettings =
+          AndroidInitializationSettings('@mipmap/ic_launcher');
+      const initSettings = InitializationSettings(android: androidSettings);
 
-    await _notificationsPlugin.initialize(initSettings);
+      await _notificationsPlugin.initialize(initSettings);
 
-    // Request notification permissions for Android 13+ and register high-priority channel
-    final androidImpl = _notificationsPlugin.resolvePlatformSpecificImplementation<
-        AndroidFlutterLocalNotificationsPlugin>();
-    if (androidImpl != null) {
-      await androidImpl.requestNotificationsPermission();
-      const channel = AndroidNotificationChannel(
-        'jarvis_reminders_channel',
-        'Jarvis Reminders',
-        description: 'Local notifications set by Jarvis Assistant',
-        importance: Importance.max,
-        enableVibration: true,
-        playSound: true,
-      );
-      await androidImpl.createNotificationChannel(channel);
+      final androidImpl = _notificationsPlugin
+          .resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin>();
+      if (androidImpl != null) {
+        await androidImpl.requestNotificationsPermission();
+        const channel = AndroidNotificationChannel(
+          'jarvis_reminders_channel',
+          'Jarvis Reminders',
+          description: 'Local notifications set by Jarvis Assistant',
+          importance: Importance.max,
+          enableVibration: true,
+          playSound: true,
+        );
+        await androidImpl.createNotificationChannel(channel);
+      }
+      _isInitialized = true;
+    } catch (e) {
+      debugPrint('[ReminderTool] Initialization warning: $e');
     }
-
-    _isInitialized = true;
   }
 
   @override
@@ -85,40 +91,38 @@ class ReminderTool extends BaseTool {
       }
     }
 
-    final notificationId = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    // Schedule through native Android AlarmManager (fires reliably even in deep sleep/Doze mode)
+    final nativeResult = await DeviceChannel.setReminder(title, delaySeconds);
 
-    const androidDetails = AndroidNotificationDetails(
-      'jarvis_reminders_channel',
-      'Jarvis Reminders',
-      channelDescription: 'Local notifications set by Jarvis Assistant',
-      importance: Importance.max,
-      priority: Priority.high,
-      showWhen: true,
-      enableVibration: true,
-      playSound: true,
-      icon: '@mipmap/ic_launcher',
-    );
-    const notificationDetails = NotificationDetails(android: androidDetails);
+    // If delay is very short (<= 5 seconds), also backup with in-memory notification
+    if (delaySeconds <= 5) {
+      Timer(Duration(seconds: delaySeconds), () async {
+        try {
+          const androidDetails = AndroidNotificationDetails(
+            'jarvis_reminders_channel',
+            'Jarvis Reminders',
+            channelDescription: 'Local notifications set by Jarvis Assistant',
+            importance: Importance.max,
+            priority: Priority.high,
+            showWhen: true,
+            enableVibration: true,
+            playSound: true,
+            icon: '@mipmap/ic_launcher',
+          );
+          const notificationDetails =
+              NotificationDetails(android: androidDetails);
+          await _notificationsPlugin.show(
+            DateTime.now().millisecondsSinceEpoch ~/ 1000,
+            '🔔 JARVIS သတိပေးချက်',
+            title,
+            notificationDetails,
+          );
+        } catch (e) {
+          debugPrint('[ReminderTool] LocalNotification error: $e');
+        }
+      });
+    }
 
-    // Schedule using Timer
-    Timer(Duration(seconds: delaySeconds), () async {
-      try {
-        await _notificationsPlugin.show(
-          notificationId,
-          '🔔 JARVIS သတိပေးချက်',
-          title,
-          notificationDetails,
-        );
-        debugPrint('[ReminderTool] Notification posted successfully: $title');
-      } catch (e) {
-        debugPrint('[ReminderTool] Error showing notification: $e');
-      }
-    });
-
-    final timeDesc = delaySeconds < 60
-        ? '$delaySeconds စက္ကန့်'
-        : '${delaySeconds ~/ 60} မိနစ်';
-
-    return "ဆရာ့အတွက် '$title' သတိပေးချက်ကို $timeDesc အကြာတွင် ဖုန်းပေါ်၌ သတ်မှတ်ပေးထားပြီး ဖြစ်ပါသည် ခင်ဗျာ။";
+    return nativeResult;
   }
 }

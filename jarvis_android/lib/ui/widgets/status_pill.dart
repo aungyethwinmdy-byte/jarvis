@@ -21,6 +21,10 @@ class StatusPill extends StatelessWidget {
         dotColor = Colors.tealAccent;
         bgColor = Colors.teal.withOpacity(0.15);
         break;
+      case LiveSessionState.listeningWakeWord:
+        dotColor = Colors.cyanAccent;
+        bgColor = Colors.cyan.withOpacity(0.18);
+        break;
       case LiveSessionState.listening:
         dotColor = Colors.redAccent;
         bgColor = Colors.redAccent.withOpacity(0.18);

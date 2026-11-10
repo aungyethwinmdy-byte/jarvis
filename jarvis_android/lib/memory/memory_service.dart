@@ -34,6 +34,28 @@ class MemoryService extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Updates the latest message (or latest message from [sender]) in place.
+  ///
+  /// Used to accumulate streaming transcription chunks into one transcript
+  /// entry instead of appending a new message for every chunk.
+  void updateLastMessage(String text, {MessageSender? sender}) {
+    if (text.trim().isEmpty || _messages.isEmpty) return;
+
+    final index = sender == null
+        ? _messages.length - 1
+        : _messages.lastIndexWhere((message) => message.sender == sender);
+    if (index < 0) return;
+
+    final previous = _messages[index];
+    _messages[index] = ChatMessage(
+      sender: previous.sender,
+      text: text.trim(),
+      timestamp: previous.timestamp,
+      isToolCall: previous.isToolCall,
+    );
+    notifyListeners();
+  }
+
   void addSystemMessage(String text, {bool isToolCall = false}) {
     _messages.add(ChatMessage(
       sender: MessageSender.system,

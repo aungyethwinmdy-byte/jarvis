@@ -46,6 +46,7 @@ class _MicButtonState extends State<MicButton>
     final isListening = widget.state == LiveSessionState.listening;
     final isSpeaking = widget.state == LiveSessionState.speaking;
     final isThinking = widget.state == LiveSessionState.thinking;
+    final isWakeWord = widget.state == LiveSessionState.listeningWakeWord;
 
     Color primaryColor = const Color(0xFF00E5FF);
     if (isListening) {
@@ -54,6 +55,8 @@ class _MicButtonState extends State<MicButton>
       primaryColor = Colors.amberAccent;
     } else if (isSpeaking) {
       primaryColor = Colors.cyanAccent;
+    } else if (isWakeWord) {
+      primaryColor = Colors.tealAccent;
     }
 
     return Column(
@@ -84,9 +87,9 @@ class _MicButtonState extends State<MicButton>
                     ),
                     boxShadow: [
                       BoxShadow(
-                        color: primaryColor.withOpacity(isListening ? 0.8 : 0.4),
-                        blurRadius: isListening ? 28 : 16,
-                        spreadRadius: isListening ? 6 : 2,
+                        color: primaryColor.withOpacity(isListening ? 0.8 : (isWakeWord ? 0.6 : 0.4)),
+                        blurRadius: isListening ? 28 : (isWakeWord ? 20 : 16),
+                        spreadRadius: isListening ? 6 : (isWakeWord ? 3 : 2),
                       )
                     ],
                     border: Border.all(
@@ -102,7 +105,9 @@ class _MicButtonState extends State<MicButton>
                               ? Icons.volume_up_rounded
                               : (isThinking
                                   ? Icons.sync_rounded
-                                  : Icons.mic_none_rounded)),
+                                  : (isWakeWord
+                                      ? Icons.hearing_rounded
+                                      : Icons.mic_none_rounded))),
                       color: Colors.white,
                       size: 38,
                     ),
@@ -115,8 +120,14 @@ class _MicButtonState extends State<MicButton>
         const SizedBox(height: 10),
         Text(
           isListening
-              ? 'နားထောင်နေသည်... (လွှတ်လျှင် စဉ်းစားမည်)'
-              : 'ဖိထားပြီး စကားပြောပါ (Push-to-Talk)',
+              ? 'နားထောင်နေပါသည်... (တိုက်ရိုက် ပြောဆိုပါ သို့မဟုတ် ဖိထားပါ)'
+              : (isSpeaking
+                  ? 'Jarvis ပြောနေပါသည်... (ကြားဖြတ်ပြောနိုင်သည်)'
+                  : (isThinking
+                      ? 'စဉ်းစားနေပါသည်...'
+                      : (isWakeWord
+                          ? '"Hey Jarvis" ဟုခေါ်ပါ သို့မဟုတ် ဖိပြီးပြောပါ'
+                          : 'ဖိထားပြီး စကားပြောပါ (Push-to-Talk)'))),
           style: TextStyle(
             color: Colors.white.withOpacity(0.7),
             fontSize: 12.5,

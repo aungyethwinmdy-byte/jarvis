@@ -40,6 +40,12 @@ dependencies:
   # Material Icons
   cupertino_icons: ^1.0.8
 
+  # On-device Wake Word Detection
+  open_wake_word: ^0.3.0
+
+  # Android Foreground Service for Background Listening
+  flutter_foreground_task: ^11.0.3
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -47,3 +53,8 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/models/melspectrogram.onnx
+    - assets/models/embedding_model.onnx
+    - assets/models/hey_jarvis.onnx
+    - assets/jarvis_knowledge.md

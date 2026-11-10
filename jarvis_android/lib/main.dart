@@ -1,12 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'audio/audio_service.dart';
+import 'audio/background_service.dart';
 import 'live/live_client.dart';
 import 'memory/memory_service.dart';
 import 'ui/home_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Initialize background service communication port and notification channel
+  BackgroundService.initialize();
 
   final audioService = AudioService();
   final memoryService = MemoryService();

@@ -65,6 +65,9 @@ _roster_dbg*
 _test_*
 check_*_out.txt
 *_test_out.txt
+logcat*.txt
+jarvis_android/home_startup.png
+jarvis_android/test_screen.png
 *.broken-backup
 *.bak*
 *.tmp

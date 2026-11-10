@@ -7,6 +7,7 @@ class LiveSessionConfig {
     required String modelName,
     required String voiceName,
     required List<BaseTool> tools,
+    String? knowledgeBase,
   }) {
     final functionDeclarations =
         tools.map((t) => t.toFunctionDeclaration()).toList();
@@ -26,7 +27,7 @@ class LiveSessionConfig {
         },
         'systemInstruction': {
           'parts': [
-            {'text': PromptBuilder.buildSystemPrompt()}
+            {'text': PromptBuilder.buildSystemPrompt(knowledgeBase: knowledgeBase)}
           ],
         },
         if (functionDeclarations.isNotEmpty)
@@ -35,6 +36,15 @@ class LiveSessionConfig {
           ],
         'inputAudioTranscription': {},
         'outputAudioTranscription': {},
+        'realtimeInputConfig': {
+          'automaticActivityDetection': {
+            'disabled': false,
+            'startOfSpeechSensitivity': 'START_SENSITIVITY_HIGH',
+            'prefixPaddingMs': 100,
+            'endOfSpeechSensitivity': 'END_SENSITIVITY_HIGH',
+            'silenceDurationMs': 400,
+          },
+        },
       }
     };
   }
